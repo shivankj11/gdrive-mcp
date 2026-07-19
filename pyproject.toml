@@ -1,0 +1,28 @@
+[project]
+name = "gdrive-mcp"
+version = "0.1.0"
+description = "Google Drive / Docs / Sheets MCP (read/write) for agents — browser-OAuth, local stdio."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "google-api-python-client>=2.100.0",
+    "google-auth>=2.23.0",
+    "google-auth-oauthlib>=1.2.0",
+    "mcp>=1.14.1",
+    "pypdf>=4.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[project.scripts]
+gdrive-mcp = "gdrive_mcp.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gdrive_mcp"]

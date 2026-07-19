@@ -1,0 +1,108 @@
+# gdrive-mcp
+
+A read/write MCP for Google Drive, Docs & Sheets that fixes what trips agents on naive Drive servers — whole-document context floods, unguarded destructive writes, and inconsistent argument names — with bounded/paged reads, spill-to-disk for full data, confirm-gated mutations, and one consistent `item` argument.
+
+> Conventions: every tool takes its target as **`item`** (a URL or ID); unknown args are rejected; destructive tools (ᶜ) return an impact preview unless called with `confirm=true`.
+>
+> **Dry-run (edit-only):** the edit tools for *existing* files — `append_text`, `insert_text`, `write_sheet`, `append_rows`, `format_cells`, `clear_range`, `delete_rows` — accept `dry_run=true`, returning a predicted before/after **without writing** (client-side; `write_sheet` shows formula cells literally, so Google's recalculation isn't simulated, and Docs `insert_text` reports the insertion point rather than a merged string). Dry-runs are still subject to the verification gate.
+>
+> **Colored text (opt-in):** `append_text`/`insert_text` take an optional `color` (hex, e.g. `#3366CC`) applied *only when explicitly passed* — unset = plain text. `read_document(include_colors=true)` returns `colored_runs` (spans with an explicit foreground color).
+>
+> **Formatted writes (opt-in):** `append_text`/`insert_text`/`create_document` accept `markdown=true`, rendering a small dialect — `#`…`######` headings, `-`/`*` bullets, `1.` numbered lists (nest with two spaces or a tab per level), `**bold**`, `*italic*`, `<u>underline</u>` — with no escape syntax (leave unset to store text verbatim). In Sheets, `format_cells` sets bold/italic/underline on a cell range without touching values.
+>
+> **Local-file sandbox:** all local file I/O is confined to `GDRIVE_MCP_FILES_DIR` (default a private `0700` dir under the config dir) — `download_file`/`export_file`/`read_full_sheet` write there (relative `dest_path`; absolute paths and `..` rejected, files `0600`), and `upload_file(source_path)` reads only from there. This stops a prompt-injected agent from writing to `~/.ssh` or exfiltrating arbitrary local files to Drive. Fetched Doc images are pulled only from Google hosts (the OAuth token is never sent elsewhere).
+>
+> **Spilled-file retention + audit:** files spilled to the sandbox are swept on server start once older than `GDRIVE_MCP_FILES_TTL_HOURS` (default 24; `0` disables) — for a long-lived server, restart to dispose, or lower the TTL. The sweep is ownership-gated: it only runs in a sandbox gdrive-mcp itself created (tracked by a `.gdrive-mcp-sandbox` marker file), so pointing `GDRIVE_MCP_FILES_DIR` at a pre-existing directory never deletes the files already there — a startup warning notes the skipped sweep, and creating the marker file yourself opts the directory in. Every tool call is appended to an audit log (`GDRIVE_MCP_AUDIT_LOG`, default `audit.log` in the config dir) recording user, tool, target id, and outcome — **never** the content read or written.
+>
+> **Verification gate:** set `GDRIVE_MCP_VERIFICATION_MODEL_PATTERNS` to comma-separated, case-insensitive model-name substrings when selected model families should require per-call user approval via MCP elicitation. A match from either the operator pin `GDRIVE_MCP_CALLING_MODEL` or the request's self-reported `_meta.model` turns the gate on; a nonmatching request model cannot turn off an operator-pin match. Set `GDRIVE_MCP_REQUIRE_VERIFICATION=always` to gate **every** call regardless of model. Gated calls fail closed on decline or when the client cannot prompt. Because request metadata is advisory, enforce mandatory policy with deployment-controlled environment variables and credential boundaries.
+
+## Tools
+
+**Discovery**
+- **`resolve_link`** — resolve any Drive/Docs/Sheets URL or ID into its id, kind, name, and link.
+- **`search_files`** — find files by name, full-text content, MIME type, and/or parent folder.
+- **`list_folder`** — list a folder's direct children.
+- **`get_metadata`** — full metadata for a file: owner, timestamps, size, parents, sharing.
+
+**Docs**
+- **`read_document`** — read a Doc as markdown/text in bounded ~8k-char chunks (paginated, with `outline`); reads all tabs by default or a specific `tab`.
+- **`extract_images`** — pull embedded images (inline **and** positioned/floating) out as viewable images, in document order (tab-aware).
+- **`create_document`** — create a new Doc, optionally with initial content (`markdown=true` for formatted).
+- **`append_text`** — append text to the end of a Doc, targeting a chosen tab (`markdown=true` for headings/lists/bold/italic/underline).
+- **`insert_text`** — insert text at a character index, targeting a chosen tab (`markdown=true` as above).
+- **`read_comments`** — list a doc/file's comments and replies.
+- **`add_comment`** — add an (unanchored) comment.
+
+**Sheets**
+- **`read_sheet`** — a bounded **5×5 preview** of each tab (configurable `max_rows`/`max_cols`; pass `a1_range` for an exact range; `values=FORMULA` for formulas).
+- **`read_full_sheet`** — read a whole tab, **save it to a local CSV**, and return the path + exact `total_rows`/`total_cols` + the 5×5 preview.
+- **`write_sheet`**ᶜ — write rows starting at a cell; gated when it would overwrite non-empty cells.
+- **`append_rows`** — append rows after the last row (non-destructive).
+- **`format_cells`** — set bold/italic/underline on a bounded A1 range (tri-state flags; values untouched).
+- **`create_spreadsheet`** — create a new spreadsheet with optional named tabs.
+- **`add_tab`** — add a tab to an existing spreadsheet.
+- **`clear_range`**ᶜ — clear the values in an A1 range.
+- **`delete_rows`**ᶜ — delete N rows from a tab.
+
+**Files**
+- **`read_file_as_text`** — a file's content as text in bounded chunks (Google-native exported; PDFs text-extracted).
+- **`download_file`** — download a binary file (base64 if small, else written to disk).
+- **`upload_file`**ᶜ — create a new file, or replace an existing file's content (replace is gated).
+- **`move_file`**ᶜ — move a file into a `parent` folder.
+- **`rename_file`**ᶜ — rename a file.
+- **`export_file`** — export a Google-native file to pdf / docx / xlsx / pptx / csv / txt / md / html.
+
+## Quick install
+
+Requires [`uv`](https://docs.astral.sh/uv/), the [Claude Code CLI](https://docs.claude.com/en/docs/claude-code) (`claude`), and your own Google OAuth client (see [Setup](#setup-one-time-per-google-account)). Then:
+
+```bash
+git clone https://github.com/shivankj11/gdrive-mcp.git && cd gdrive-mcp && bash setup.sh
+```
+
+`setup.sh` is idempotent — re-run it any time. It installs `uv` (if missing), runs the one-time Google browser consent, and registers the server with Claude Code. It looks for the Desktop-app OAuth client JSON in this order: an existing `~/.config/gdrive-mcp/oauth_client.json`; a `GDRIVE_MCP_OAUTH_CLIENT_CMD` that prints the JSON; or a plaintext `oauth_client.json` at the repo root. If none is found it tells you how to create one.
+
+## Setup (one-time, per Google account)
+
+1. In a Google Cloud project you control, create an **OAuth client** (Application type **Desktop app**) and configure its consent screen. The `drive` scope is restricted, so follow Google's verification requirements (for personal use, add yourself as a test user).
+2. Enable the [Drive](https://console.cloud.google.com/apis/library/drive.googleapis.com), [Docs](https://console.cloud.google.com/apis/library/docs.googleapis.com), and [Sheets](https://console.cloud.google.com/apis/library/sheets.googleapis.com) APIs (all three are authorized by the single `drive` scope, but each must be enabled once).
+3. Save the client JSON to `~/.config/gdrive-mcp/oauth_client.json` (or set `GDRIVE_MCP_OAUTH_CLIENT`), then:
+
+```bash
+uv run gdrive-mcp auth      # one-time loopback-OAuth browser consent; caches a token
+uv run gdrive-mcp whoami    # verify
+```
+
+You authenticate as **yourself**, so the server can only reach what your own Google account already can.
+
+## Register with an MCP client
+
+```bash
+claude mcp add gdrive -- uv run --directory /path/to/gdrive-mcp gdrive-mcp serve
+```
+
+## Configuration
+
+| Env var | Default | Purpose |
+| --- | --- | --- |
+| `GDRIVE_MCP_OAUTH_CLIENT` | `~/.config/gdrive-mcp/oauth_client.json` | Desktop-app OAuth client JSON |
+| `GDRIVE_MCP_TOKEN` | `~/.config/gdrive-mcp/token.json` | Cached per-user token |
+| `GDRIVE_MCP_FILES_DIR` | `~/.config/gdrive-mcp/files` | Sandbox for local file I/O — download/export/CSV writes and upload sources are confined here (absolute/`..` rejected); swept only if created by gdrive-mcp (`.gdrive-mcp-sandbox` marker) |
+| `GDRIVE_MCP_FILES_TTL_HOURS` | `24` | Age (hours) after which spilled sandbox files are swept on server start; `0` disables |
+| `XDG_CONFIG_HOME` | `~/.config` | Base config dir |
+| `GDRIVE_MCP_CALLING_MODEL` | *(unset)* | Operator-controlled caller-model pin; used when the client does not send `_meta.model` |
+| `GDRIVE_MCP_VERIFICATION_MODEL_PATTERNS` | *(unset)* | Comma-separated model-name substrings that require per-call verification |
+| `GDRIVE_MCP_REQUIRE_VERIFICATION` | *(unset)* | Set to `always` to gate **every** call regardless of model (anti-delegation hard override) |
+
+Credential files are git-ignored and must never be committed.
+
+## Development
+
+```bash
+uv sync            # install deps (incl. dev group)
+uv run pytest      # run the test suite
+```
+
+## License
+
+MIT — see [LICENSE](LICENSE).

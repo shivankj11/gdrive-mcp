@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+dist/
+build/
+*.egg-info/
+.DS_Store
+
+# OAuth credentials — never commit the plaintext
+oauth_client.json
+gcp-oauth.keys.json
+client_secret*.json
+token.json
+*credentials*.json
+
+# Local configuration and runtime data
+.env
+.env.*
+audit.log
+files/
