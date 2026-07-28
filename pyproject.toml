@@ -8,7 +8,9 @@ dependencies = [
     "google-api-python-client>=2.100.0",
     "google-auth>=2.23.0",
     "google-auth-oauthlib>=1.2.0",
-    "mcp>=1.14.1",
+    # Upper bound is load-bearing: mcp 2.0.0 dropped mcp.server.fastmcp entirely
+    # (replaced by mcp.server.mcpserver / MCPServer), which server.py imports.
+    "mcp>=1.14.1,<2",
     "pypdf>=4.0.0",
 ]
 

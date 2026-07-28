@@ -320,7 +320,7 @@ requires-dist = [
     { name = "google-api-python-client", specifier = ">=2.100.0" },
     { name = "google-auth", specifier = ">=2.23.0" },
     { name = "google-auth-oauthlib", specifier = ">=1.2.0" },
-    { name = "mcp", specifier = ">=1.14.1" },
+    { name = "mcp", specifier = ">=1.14.1,<2" },
     { name = "pypdf", specifier = ">=4.0.0" },
 ]
 
