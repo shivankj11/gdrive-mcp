@@ -36,6 +36,33 @@ def test_records_only_safe_keys_and_no_content(audit_log):
     assert "Confidential Title" not in blob and "secret-cell-A" not in blob
 
 
+def test_locator_args_are_never_logged(audit_log):
+    # Locators and replacement text are document content by definition, so they are sensitive.
+    # _SAFE_ARG_KEYS is an allowlist, which excludes them by default — pinned here so widening
+    # the allowlist can't quietly start writing document text into the audit log.
+    audit.record(
+        "replace_text",
+        {
+            "item": "B" * 30,
+            "match": "secret-match-text",
+            "section": "Confidential Heading",
+            "replacement": "secret-replacement-text",
+            "after": "secret-anchor-text",
+        },
+        "ok",
+    )
+    entry = json.loads(audit_log.read_text().strip())
+    assert set(entry["args"]) <= _SAFE
+    blob = audit_log.read_text()
+    for secret in (
+        "secret-match-text",
+        "Confidential Heading",
+        "secret-replacement-text",
+        "secret-anchor-text",
+    ):
+        assert secret not in blob
+
+
 def test_unparseable_ref_is_masked(audit_log):
     audit.record("read_document", {"item": "free text not a ref"}, "ok")
     assert json.loads(audit_log.read_text().strip())["args"]["item"] == "<unparseable>"

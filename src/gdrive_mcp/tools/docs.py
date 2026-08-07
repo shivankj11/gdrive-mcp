@@ -12,9 +12,11 @@ from urllib.parse import urlparse
 from googleapiclient.errors import HttpError
 from mcp.server.fastmcp import Image
 
+from gdrive_mcp import locate
 from gdrive_mcp.chunking import DEFAULT_MAX_CHARS, paginate
 from gdrive_mcp.clients import authed_session, docs, drive
 from gdrive_mcp.errors import api_errors
+from gdrive_mcp.guard import preview_response
 from gdrive_mcp.ids import parse_ref, parse_tab
 from gdrive_mcp.md import (
     ParsedMarkdown,
@@ -101,7 +103,14 @@ def _content_to_markdown(content: list) -> tuple[str, list[dict]]:
             style = para.get("paragraphStyle", {}).get("namedStyleType", "")
             if style in _HEADING and text:
                 lines.append(f"{_HEADING[style]} {text}")
-                outline.append({"level": int(style[-1]), "text": text})
+                # start/end are the API's own UTF-16 offsets, making each outline entry a
+                # usable write anchor (see locate.py) rather than just a table of contents.
+                outline.append({
+                    "level": int(style[-1]),
+                    "text": text,
+                    "start": el["startIndex"],
+                    "end": el["endIndex"],
+                })
             else:
                 lines.append(text)
             continue
@@ -213,9 +222,15 @@ def read_document(
 
     Multi-tab docs: by default every tab is read (each prefixed with its title as a heading);
     pass a `tab` id, or an `item` URL containing `tab=t.xxxx`, to read only that tab. Returns the
-    requested chunk (0-based) plus title, the doc's `tabs`, the outline, and paging metadata
-    (total_chunks, total_chars, has_more). Set max_chars<=0 to get the whole document. Set
+    requested chunk (0-based) plus title, the doc's `tabs`, the outline, `revision_id`, and paging
+    metadata (total_chunks, total_chars, has_more). Set max_chars<=0 to get the whole document. Set
     include_colors=true to also return `colored_runs` (text spans with an explicit foreground color).
+
+    Each `outline` entry carries the heading's `start`/`end` document offsets. Offsets in the
+    returned *content* cannot be computed by counting characters — the markdown is rendered
+    (heading prefixes, table delimiter rows, escaped pipes), so it does not align with the doc's
+    index space. To edit, pass the heading text to a write tool's `section=`/`after=`/`before=`
+    locator and let the server resolve the offsets.
     """
     did = parse_ref(item).id
     tab_id = tab or parse_tab(item)
@@ -249,6 +264,9 @@ def read_document(
     result = {
         "document_id": did,
         "title": doc.get("title"),
+        # The revision the outline offsets describe. Pass it to a write tool to have the write
+        # rejected rather than misapplied if the doc changed since this read.
+        "revision_id": doc.get("revisionId"),
         "tabs": [{"id": tid, "title": title} for tid, title, *_ in all_tabs],
         "tab_read": tab_id or ("all" if len(all_tabs) > 1 else None),
         "outline": outline,
@@ -553,29 +571,38 @@ def append_text(
 def insert_text(
     item: str,
     text: str,
-    index: int,
+    index: int | None = None,
+    after: str | None = None,
+    before: str | None = None,
     tab: str | None = None,
     color: str | None = None,
     markdown: bool = False,
     dry_run: bool = False,
 ) -> dict:
-    """Insert text at a character index in a Google Doc (item = URL or ID).
+    """Insert text into a Google Doc (item = URL or ID) at a location found by content.
+
+    Pass exactly one anchor. Prefer `after` or `before`: a literal, case-sensitive substring
+    (within one paragraph) that the insertion goes after or before — the server resolves it to a
+    real offset, so it is always valid. `index` is the raw alternative: a Docs STRUCTURAL offset,
+    NOT a character count into read_document's content (that text is rendered markdown and does
+    not align with the document's index space) — use it only if you already hold a real offset.
 
     markdown=true renders the same dialect as append_text (headings, bullets, numbered lists,
-    **bold**, *italic*, <u>underline</u>, and GFM pipe tables); note heading/list styles apply to
-    the whole paragraphs the insertion touches, so insert block markdown at a paragraph boundary.
-    Multi-tab docs: pass a `tab` (id, or an `item` URL with `tab=t.xxxx`), else the first tab.
-    `color` (hex like '#3366CC') colors the inserted text (ignored for tables); leave it unset for
-    plain text. dry_run=true reports what would be inserted and where without writing. (`index` is
-    a Docs structural offset, so the exact merged text isn't reconstructed client-side.)
+    **bold**, *italic*, <u>underline</u>, and GFM pipe tables). Block content anchored with
+    after/before snaps to a paragraph boundary so heading and list styling cannot bleed into a
+    neighbouring paragraph. Multi-tab docs: pass a `tab` (id, or an `item` URL with `tab=t.xxxx`),
+    else the first tab. `color` (hex like '#3366CC') colors the inserted text (ignored for
+    tables); leave it unset for plain text. dry_run=true reports what would be inserted and where
+    without writing.
     """
     did = parse_ref(item).id
     doc = docs().documents().get(documentId=did, includeTabsContent=True).execute()
-    tid, _body = _resolve_write_tab(doc, tab or parse_tab(item))
+    tid, body = _resolve_write_tab(doc, tab or parse_tab(item))
 
     if markdown:
         segments = split_blocks(text)
         if has_table(segments):  # structural (table) content -> segmented write path
+            index = _anchor(body, index, after, before, snap=True, required=True)
             n_tables = _table_segment_count(segments)
             if dry_run:
                 return {"dry_run": True, "action": "insert_text", "tab": tid, "at_index": index,
@@ -586,6 +613,9 @@ def insert_text(
     rgb = _hex_to_rgb(color) if color is not None else None  # validate before any dry-run return
     parsed = parse_markdown(text) if markdown else None
     insert = parsed.text if parsed else text
+    # Block markdown snaps to a paragraph boundary; inline/plain text inserts exactly where the
+    # locator points, so `after="foo"` lands immediately after the 'foo' it matched.
+    index = _anchor(body, index, after, before, snap=bool(parsed and parsed.has_blocks), required=True)
     if dry_run:
         out = {
             "dry_run": True,
@@ -609,6 +639,179 @@ def insert_text(
     if parsed:
         result["markdown"] = _md_summary(parsed)
     return result
+
+
+# ---- locator-anchored edits (delete/replace) ---------------------------------------------
+
+_PREVIEW_CHARS = 200
+
+
+def _clip(s: str) -> str:
+    return s if len(s) <= _PREVIEW_CHARS else s[:_PREVIEW_CHARS] + "…"
+
+
+def _write_control(doc: dict) -> dict:
+    """Pin the write to the revision the ranges were resolved against.
+
+    Resolving and writing are two round-trips; without this a concurrent edit between them would
+    silently shift every index and the write would land on the wrong text. With it, the batch is
+    rejected instead.
+    """
+    rev = doc.get("revisionId")
+    return {"writeControl": {"requiredRevisionId": rev}} if rev else {}
+
+
+def _anchor(body: list, index: int | None, after: str | None, before: str | None, *, snap: bool, required: bool) -> int:
+    """Resolve a write anchor from `after`/`before` (content locators) or a raw `index`.
+
+    `snap` pins the anchor to a paragraph boundary — insertTable rejects any other location, and
+    block markdown must not land mid-paragraph. Locator anchors are therefore boundary-valid by
+    construction, which is what raw `index` cannot guarantee.
+    """
+    given = [name for name, v in (("index", index), ("after", after), ("before", before)) if v is not None]
+    if len(given) > 1:
+        raise RuntimeError(f"pass only one of index=, after=, before=; got {', '.join(given)}")
+    if not given:
+        if required:
+            raise RuntimeError("pass one of after=, before= (locate by text) or index= (a raw Docs offset)")
+        return locate.body_end(body)
+
+    if index is not None:
+        return index
+    needle = after if after is not None else before
+    hits = locate.find_matches(body, needle)
+    if not hits:
+        raise RuntimeError(
+            f"no match for {needle!r} in this tab (matching is case-sensitive and cannot span paragraphs)"
+        )
+    start, end = hits[0]
+    if not snap:
+        return end if after is not None else start
+    bounds = locate.paragraph_bounds(body, start)
+    if bounds is None:
+        raise RuntimeError(
+            f"{needle!r} is inside a table cell; block content (headings, lists, tables) needs a "
+            f"paragraph boundary, so anchor it to text outside the table instead."
+        )
+    para_start, para_end = bounds
+    return min(para_end, locate.body_end(body)) if after is not None else para_start
+
+
+def _locate(item: str, tab: str | None, match: str | None, section: str | None, occurrence: int):
+    """Shared front half of delete_text/replace_text: fetch, pick the tab, resolve the locator."""
+    did = parse_ref(item).id
+    doc = docs().documents().get(documentId=did, includeTabsContent=True).execute()
+    tid, body = _resolve_write_tab(doc, tab or parse_tab(item))
+    ranges, described = locate.resolve(body, match, section, occurrence)
+    return did, doc, tid, body, ranges, described
+
+
+@api_errors
+def delete_text(
+    item: str,
+    match: str | None = None,
+    section: str | None = None,
+    occurrence: int = 1,
+    tab: str | None = None,
+    confirm: bool = False,
+    dry_run: bool = False,
+) -> dict:
+    """Delete text from a Google Doc (item = URL or ID), located by content rather than by index.
+
+    Pass exactly one locator: `match` (a literal substring, case-sensitive, must lie within a
+    single paragraph) or `section` (a heading's exact text — removes that heading and everything
+    under it, up to the next heading of the same or higher level). For `match`, `occurrence` is
+    1-based and defaults to the first; pass occurrence=0 to delete every occurrence.
+
+    Multi-tab docs: pass a `tab` id (or an `item` URL with `tab=t.xxxx`), else the first tab.
+    dry_run=true reports exactly what would be removed without writing. This tool is destructive:
+    without confirm=true it returns a preview of the text it would delete and writes nothing.
+    """
+    did, doc, tid, body, ranges, described = _locate(item, tab, match, section, occurrence)
+    removing = [locate.text_in_range(body, s, e) for s, e in ranges]
+    impact = {
+        "tab": tid,
+        "target": described,
+        "occurrences": len(ranges),
+        "chars": sum(e - s for s, e in ranges),
+        "ranges": [{"start": s, "end": e} for s, e in ranges],
+        "deletes_text": [_clip(t) for t in removing],
+    }
+    if dry_run:
+        return {"dry_run": True, "action": "delete_text", **impact}
+    if not confirm:
+        return preview_response("delete_text", impact)
+
+    # Descending: each deleteContentRange shifts everything after it, so removing the later
+    # ranges first keeps the earlier ones valid with no offset arithmetic.
+    requests = [{"deleteContentRange": {"range": _doc_range(s, e, tid)}} for s, e in sorted(ranges, reverse=True)]
+    docs().documents().batchUpdate(
+        documentId=did, body={"requests": requests, **_write_control(doc)}
+    ).execute()
+    return {"document_id": did, "deleted": True, **impact}
+
+
+@api_errors
+def replace_text(
+    item: str,
+    replacement: str,
+    match: str | None = None,
+    section: str | None = None,
+    occurrence: int = 1,
+    tab: str | None = None,
+    markdown: bool = False,
+    confirm: bool = False,
+    dry_run: bool = False,
+) -> dict:
+    """Replace text in a Google Doc (item = URL or ID), located by content rather than by index.
+
+    Locators work exactly as in `delete_text`: exactly one of `match` (literal, case-sensitive,
+    within one paragraph) or `section` (a heading and its content), with 1-based `occurrence`
+    over a match (0 = every occurrence). markdown=true renders `replacement` in the same dialect
+    as `append_text` minus pipe tables (use `insert_table` for those).
+
+    Each occurrence is deleted and rewritten in a single batch, so the doc is never left with the
+    old text removed and the new text missing. Multi-tab docs: pass a `tab` id (or an `item` URL
+    with `tab=t.xxxx`), else the first tab. dry_run=true previews without writing. This tool is
+    destructive: without confirm=true it returns a preview and writes nothing.
+    """
+    if markdown and has_table(split_blocks(replacement)):
+        raise RuntimeError(
+            "replace_text cannot write pipe tables (a table needs a separate insert+fill pass, "
+            "which would break the single-batch replace). Use insert_table, or drop markdown=true."
+        )
+    did, doc, tid, body, ranges, described = _locate(item, tab, match, section, occurrence)
+    parsed = parse_markdown(replacement) if markdown else None
+    insert = parsed.text if parsed else replacement
+    replacing = [locate.text_in_range(body, s, e) for s, e in ranges]
+    impact = {
+        "tab": tid,
+        "target": described,
+        "occurrences": len(ranges),
+        "ranges": [{"start": s, "end": e} for s, e in ranges],
+        "replaces_text": [_clip(t) for t in replacing],
+        "with_text": _clip(insert),
+    }
+    if parsed:
+        impact["markdown"] = _md_summary(parsed)
+    if dry_run:
+        return {"dry_run": True, "action": "replace_text", **impact}
+    if not confirm:
+        return preview_response("replace_text", impact)
+
+    # Descending, delete+insert paired per range: going bottom-up means an earlier range's
+    # indexes are never disturbed by an edit made below it, so one batch is enough.
+    requests: list[dict] = []
+    for s, e in sorted(ranges, reverse=True):
+        requests.append({"deleteContentRange": {"range": _doc_range(s, e, tid)}})
+        if insert:
+            requests.append({"insertText": {"location": _loc(s, tid), "text": insert}})
+            if parsed:
+                requests.extend(style_requests(parsed, s, tid))
+    docs().documents().batchUpdate(
+        documentId=did, body={"requests": requests, **_write_control(doc)}
+    ).execute()
+    return {"document_id": did, "replaced": True, **impact}
 
 
 @api_errors
@@ -650,6 +853,8 @@ def insert_table(
     item: str,
     rows: list,
     index: int | None = None,
+    after: str | None = None,
+    before: str | None = None,
     tab: str | None = None,
     header: bool = False,
     dry_run: bool = False,
@@ -658,16 +863,18 @@ def insert_table(
 
     `rows` is a list of equal-length row lists (e.g. [["Name","Role"],["Ada","Eng"]]); empty cells
     are left blank. header=true bolds the first row. Appends at the end of the target tab by
-    default; pass `index` to place it — `index` is a Docs STRUCTURAL offset at a paragraph boundary
-    (not a character count from read_document), so prefer appending (omit index) unless you have a
-    boundary offset. Multi-tab docs: pass a `tab` id (or an `item` URL with `tab=t.xxxx`), else the
-    first tab. dry_run=true previews the table without writing.
+    default. To place it, prefer `after` or `before`: a literal, case-sensitive substring (within
+    one paragraph) whose paragraph the table goes after or before — these always resolve to the
+    paragraph boundary insertTable requires. `index` is the raw alternative, a Docs STRUCTURAL
+    offset at a paragraph boundary (not a character count from read_document), and is rejected by
+    the API if it lands mid-paragraph. Multi-tab docs: pass a `tab` id (or an `item` URL with
+    `tab=t.xxxx`), else the first tab. dry_run=true previews the table without writing.
     """
     n_rows, n_cols = _validate_rows(rows)
     did = parse_ref(item).id
     doc = docs().documents().get(documentId=did, includeTabsContent=True).execute()
     tid, body = _resolve_write_tab(doc, tab or parse_tab(item))
-    start = body[-1]["endIndex"] - 1 if index is None else index
+    start = _anchor(body, index, after, before, snap=True, required=False)
 
     if dry_run:
         return {
@@ -692,7 +899,9 @@ def insert_table(
         if index is not None and getattr(exc.resp, "status", None) == 400:
             raise RuntimeError(
                 f"could not insert a table at index {index}: index must be a Docs structural offset at "
-                f"a paragraph boundary (not a character count from read_document). Omit index to append."
+                f"a paragraph boundary (not a character count from read_document). Use after='<text>' or "
+                f"before='<text>' to locate the spot by content — those always resolve to a valid "
+                f"boundary — or omit index to append."
             ) from exc
         raise
 
@@ -753,6 +962,8 @@ _TOOLS = (
     append_text,
     insert_text,
     insert_table,
+    delete_text,
+    replace_text,
     read_comments,
     add_comment,
 )

@@ -4,7 +4,9 @@ A read/write MCP for Google Drive, Docs & Sheets that fixes what trips agents on
 
 > Conventions: every tool takes its target as **`item`** (a URL or ID); unknown args are rejected; destructive tools (ᶜ) return an impact preview unless called with `confirm=true`.
 >
-> **Dry-run (edit-only):** the edit tools for *existing* files — `append_text`, `insert_text`, `insert_table`, `write_sheet`, `append_rows`, `format_cells`, `clear_range`, `delete_rows` — accept `dry_run=true`, returning a predicted before/after **without writing** (client-side; `write_sheet` shows formula cells literally, so Google's recalculation isn't simulated, and Docs `insert_text` reports the insertion point rather than a merged string). Dry-runs are still subject to the verification gate.
+> **Dry-run (edit-only):** the edit tools for *existing* files — `append_text`, `insert_text`, `insert_table`, `delete_text`, `replace_text`, `write_sheet`, `append_rows`, `format_cells`, `clear_range`, `delete_rows` — accept `dry_run=true`, returning a predicted before/after **without writing** (client-side; `write_sheet` shows formula cells literally, so Google's recalculation isn't simulated, and Docs `insert_text` reports the insertion point rather than a merged string). Dry-runs are still subject to the verification gate.
+>
+> **Editing a Doc by content, not by offset:** `delete_text`/`replace_text` (and `insert_text`/`insert_table`'s `after`/`before`) locate their target with a **locator** — `match` (a literal, case-sensitive substring lying within one paragraph) or `section` (a heading's exact text, covering that heading and everything under it up to the next heading of the same or higher level). Character offsets into `read_document`'s content are **not** valid Docs indexes: that content is rendered markdown (heading prefixes, synthesized table delimiter rows, escaped pipes) and does not align with the document's UTF-16 index space. The server resolves locators against the API's own element offsets instead, so anchors are always valid — and for block content they land on a paragraph boundary by construction. Each `read_document` `outline` entry also carries real `start`/`end` offsets, plus a `revision_id`; locator writes pin that revision, so a concurrent edit makes the write **fail** rather than land on shifted text.
 >
 > **Colored text (opt-in):** `append_text`/`insert_text` take an optional `color` (hex, e.g. `#3366CC`) applied *only when explicitly passed* — unset = plain text. `read_document(include_colors=true)` returns `colored_runs` (spans with an explicit foreground color).
 >
@@ -25,12 +27,14 @@ A read/write MCP for Google Drive, Docs & Sheets that fixes what trips agents on
 - **`get_metadata`** — full metadata for a file: owner, timestamps, size, parents, sharing.
 
 **Docs**
-- **`read_document`** — read a Doc as markdown/text in bounded ~8k-char chunks (paginated, with `outline`); reads all tabs by default or a specific `tab`.
+- **`read_document`** — read a Doc as markdown/text in bounded ~8k-char chunks (paginated, with an `outline` carrying each heading's `start`/`end` offsets, plus `revision_id`); reads all tabs by default or a specific `tab`.
 - **`extract_images`** — pull embedded images (inline **and** positioned/floating) out as viewable images, in document order (tab-aware).
 - **`create_document`** — create a new Doc, optionally with initial content (`markdown=true` for formatted).
 - **`append_text`** — append text to the end of a Doc, targeting a chosen tab (`markdown=true` for headings/lists/bold/italic/underline).
-- **`insert_text`** — insert text at a character index, targeting a chosen tab (`markdown=true` as above).
-- **`insert_table`** — insert a table filled from a `rows` grid (append or at an `index`; `header=true` bolds the first row).
+- **`insert_text`** — insert text `after`/`before` a matched substring (or at a raw `index`), targeting a chosen tab (`markdown=true` as above).
+- **`insert_table`** — insert a table filled from a `rows` grid (append, or `after`/`before` a match, or at an `index`; `header=true` bolds the first row).
+- **`delete_text`**ᶜ — delete a matched substring or a whole heading `section`.
+- **`replace_text`**ᶜ — replace a matched substring or a whole `section` (`markdown=true` for formatted replacements; use `insert_table` for tables).
 - **`read_comments`** — list a doc/file's comments and replies.
 - **`add_comment`** — add an (unanchored) comment.
 

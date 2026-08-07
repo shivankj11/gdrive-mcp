@@ -17,7 +17,10 @@ _READ_ONLY = {
 }
 # Note: read_full_sheet is NOT read-only — it spills a local CSV (a local side effect).
 # Tools that can overwrite/remove existing data.
-_DESTRUCTIVE = {"write_sheet", "clear_range", "delete_rows", "move_file", "rename_file", "upload_file"}
+_DESTRUCTIVE = {
+    "write_sheet", "clear_range", "delete_rows", "move_file", "rename_file", "upload_file",
+    "delete_text", "replace_text",
+}
 # Everything else is additive (append/create/add, or a read that spills a new local file).
 
 

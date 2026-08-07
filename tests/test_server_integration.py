@@ -42,7 +42,7 @@ def _text(result) -> str:
 def test_registered_tools_and_annotations():
     listed = asyncio.run(_list())
     by_name = {t.name: t for t in listed.tools}
-    assert len(by_name) == 27
+    assert len(by_name) == 29
     assert by_name["read_sheet"].annotations.readOnlyHint is True
     assert by_name["delete_rows"].annotations.destructiveHint is True
     assert by_name["append_text"].annotations.destructiveHint is False
@@ -50,6 +50,28 @@ def test_registered_tools_and_annotations():
     assert by_name["insert_table"].annotations.destructiveHint is False  # additive, not destructive
     assert by_name["format_cells"].annotations.readOnlyHint is False
     assert "ctx" not in (by_name["read_sheet"].inputSchema.get("properties") or {})
+
+
+def test_locator_edit_tools_are_registered_as_destructive():
+    by_name = {t.name: t for t in asyncio.run(_list()).tools}
+    for name in ("delete_text", "replace_text"):
+        assert by_name[name].annotations.destructiveHint is True
+        assert by_name[name].annotations.readOnlyHint is not True
+        # the gate wrapper injects ctx; it must not surface in the agent-facing schema
+        assert "ctx" not in (by_name[name].inputSchema.get("properties") or {})
+
+
+def test_locator_params_are_exposed_on_the_insert_tools():
+    by_name = {t.name: t for t in asyncio.run(_list()).tools}
+    for name in ("insert_text", "insert_table"):
+        props = by_name[name].inputSchema.get("properties") or {}
+        assert {"after", "before", "index"} <= set(props)
+
+
+def test_unknown_kwarg_rejected_on_new_tools():
+    res = asyncio.run(_call("delete_text", {"item": "A" * 30, "match": "x", "bogus": 1}))
+    assert res.isError
+    assert "bogus" in _text(res) or "Extra" in _text(res) or "unexpected" in _text(res)
 
 
 def test_unknown_kwarg_rejected_on_registered_path():

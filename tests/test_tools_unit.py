@@ -208,10 +208,14 @@ def test_search_query_and_escaping(monkeypatch):
 
 
 def test_content_to_markdown_headings_and_table():
+    # Elements carry startIndex/endIndex exactly as the API returns them: the outline's write
+    # anchors come from those offsets, so a fixture without them would not exercise the real shape.
     content = [
-        {"paragraph": {"paragraphStyle": {"namedStyleType": "HEADING_1"},
-                       "elements": [{"textRun": {"content": "Title\n"}}]}},
-        {"paragraph": {"elements": [{"textRun": {"content": "body text\n"}}]}},
+        {"startIndex": 1, "endIndex": 7,
+         "paragraph": {"paragraphStyle": {"namedStyleType": "HEADING_1"},
+                       "elements": [{"startIndex": 1, "textRun": {"content": "Title\n"}}]}},
+        {"startIndex": 7, "endIndex": 17,
+         "paragraph": {"elements": [{"startIndex": 7, "textRun": {"content": "body text\n"}}]}},
         {"table": {"tableRows": [
             {"tableCells": [
                 {"content": [{"paragraph": {"elements": [{"textRun": {"content": "a | x"}}]}}]},
@@ -228,7 +232,8 @@ def test_content_to_markdown_headings_and_table():
     assert "body text" in md
     # GFM: header row, a column-matched delimiter row, then the body row; '|' in a cell is escaped
     assert "| a \\| x | b |\n| --- | --- |\n| 1 | 2 |" in md
-    assert outline == [{"level": 1, "text": "Title"}]
+    # start/end make each outline entry a usable write anchor, not just a table of contents
+    assert outline == [{"level": 1, "text": "Title", "start": 1, "end": 7}]
 
 
 def test_flatten_tabs_depth_first_with_children():
@@ -545,6 +550,231 @@ def test_read_document_include_colors(monkeypatch):
     monkeypatch.setattr(docs_mod, "docs", lambda: svc)
     assert docs_mod.read_document("A" * 30, include_colors=True)["colored_runs"] == [{"text": "hello", "color": "#0000ff"}]
     assert "colored_runs" not in docs_mod.read_document("A" * 30)  # off by default
+
+
+# ---- locator-anchored edits: delete_text / replace_text --------------------------------
+
+def _para(start: int, *runs: str, style: str | None = None) -> dict:
+    elements, idx = [], start
+    for content in runs:
+        elements.append({"startIndex": idx, "textRun": {"content": content}})
+        idx += len(content.encode("utf-16-le")) // 2
+    p: dict = {"elements": elements}
+    if style:
+        p["paragraphStyle"] = {"namedStyleType": style}
+    return {"startIndex": start, "endIndex": idx, "paragraph": p}
+
+
+def _locator_svc(body_content: list, revision: str | None = "rev-1", tabbed: bool = True):
+    svc = MagicMock()
+    doc: dict = {"revisionId": revision} if revision else {}
+    if tabbed:
+        doc["tabs"] = [{"tabProperties": {"tabId": "t.0", "title": "T"},
+                        "documentTab": {"body": {"content": body_content}}}]
+    else:
+        doc["body"] = {"content": body_content}
+    svc.documents.return_value.get.return_value.execute.return_value = doc
+    return svc
+
+
+def _doc_body():
+    return [_para(1, "keep alpha keep\n"), _para(17, "alpha again\n")]
+
+
+def _reqs(svc) -> list:
+    return svc.documents.return_value.batchUpdate.call_args.kwargs["body"]["requests"]
+
+
+def _body_arg(svc) -> dict:
+    return svc.documents.return_value.batchUpdate.call_args.kwargs["body"]
+
+
+def test_delete_text_gates_without_confirm(monkeypatch):
+    svc = _locator_svc(_doc_body())
+    monkeypatch.setattr(docs_mod, "docs", lambda: svc)
+    out = docs_mod.delete_text("A" * 30, match="alpha")
+    assert out["status"] == "confirmation_required"
+    assert out["impact"]["occurrences"] == 1 and out["impact"]["deletes_text"] == ["alpha"]
+    assert not svc.documents.return_value.batchUpdate.called
+
+
+def test_delete_text_executes_with_confirm(monkeypatch):
+    svc = _locator_svc(_doc_body())
+    monkeypatch.setattr(docs_mod, "docs", lambda: svc)
+    out = docs_mod.delete_text("A" * 30, match="alpha", confirm=True)
+    assert out["deleted"] is True and out["chars"] == 5
+    assert _reqs(svc) == [{"deleteContentRange": {"range": {"startIndex": 6, "endIndex": 11, "tabId": "t.0"}}}]
+
+
+def test_delete_text_dry_run_neither_writes_nor_gates(monkeypatch):
+    svc = _locator_svc(_doc_body())
+    monkeypatch.setattr(docs_mod, "docs", lambda: svc)
+    out = docs_mod.delete_text("A" * 30, match="alpha", dry_run=True)
+    assert out["dry_run"] is True and "status" not in out  # dry-run explores; confirm gates
+    assert out["deletes_text"] == ["alpha"]
+    assert not svc.documents.return_value.batchUpdate.called
+
+
+def test_delete_text_all_occurrences_emit_descending_ranges(monkeypatch):
+    svc = _locator_svc(_doc_body())
+    monkeypatch.setattr(docs_mod, "docs", lambda: svc)
+    docs_mod.delete_text("A" * 30, match="alpha", occurrence=0, confirm=True)
+    starts = [r["deleteContentRange"]["range"]["startIndex"] for r in _reqs(svc)]
+    assert starts == sorted(starts, reverse=True)  # bottom-up keeps earlier ranges valid
+    assert starts == [17, 6]
+
+
+def test_locator_writes_pin_the_resolved_revision(monkeypatch):
+    svc = _locator_svc(_doc_body())
+    monkeypatch.setattr(docs_mod, "docs", lambda: svc)
+    docs_mod.delete_text("A" * 30, match="alpha", confirm=True)
+    assert _body_arg(svc)["writeControl"] == {"requiredRevisionId": "rev-1"}
+
+
+def test_untabbed_doc_emits_no_tab_id(monkeypatch):
+    svc = _locator_svc(_doc_body(), tabbed=False)
+    monkeypatch.setattr(docs_mod, "docs", lambda: svc)
+    docs_mod.delete_text("A" * 30, match="alpha", confirm=True)
+    assert _reqs(svc)[0]["deleteContentRange"]["range"] == {"startIndex": 6, "endIndex": 11}
+
+
+def test_delete_text_section_removes_heading_and_body(monkeypatch):
+    body = [_para(1, "Intro\n", style="HEADING_1"), _para(7, "body\n"), _para(12, "Next\n", style="HEADING_1")]
+    svc = _locator_svc(body)
+    monkeypatch.setattr(docs_mod, "docs", lambda: svc)
+    out = docs_mod.delete_text("A" * 30, section="Intro", confirm=True)
+    assert out["deletes_text"] == ["Intro\nbody\n"]  # heading + its content, trailing newline included
+    assert _reqs(svc)[0]["deleteContentRange"]["range"] == {"startIndex": 1, "endIndex": 12, "tabId": "t.0"}
+
+
+def test_delete_text_requires_exactly_one_locator(monkeypatch):
+    svc = _locator_svc(_doc_body())
+    monkeypatch.setattr(docs_mod, "docs", lambda: svc)
+    with pytest.raises(RuntimeError, match="exactly one"):
+        docs_mod.delete_text("A" * 30, confirm=True)
+    assert not svc.documents.return_value.batchUpdate.called
+
+
+def test_replace_text_gates_then_replaces_in_one_batch(monkeypatch):
+    svc = _locator_svc(_doc_body())
+    monkeypatch.setattr(docs_mod, "docs", lambda: svc)
+    gated_out = docs_mod.replace_text("A" * 30, "beta", match="alpha")
+    assert gated_out["status"] == "confirmation_required"
+    assert gated_out["impact"]["replaces_text"] == ["alpha"] and gated_out["impact"]["with_text"] == "beta"
+    assert not svc.documents.return_value.batchUpdate.called
+
+    docs_mod.replace_text("A" * 30, "beta", match="alpha", confirm=True)
+    assert svc.documents.return_value.batchUpdate.call_count == 1  # never a delete-then-insert window
+    assert [next(iter(r)) for r in _reqs(svc)] == ["deleteContentRange", "insertText"]
+    assert _reqs(svc)[1]["insertText"] == {"location": {"index": 6, "tabId": "t.0"}, "text": "beta"}
+
+
+def test_replace_text_markdown_styles_land_on_the_new_text(monkeypatch):
+    svc = _locator_svc(_doc_body())
+    monkeypatch.setattr(docs_mod, "docs", lambda: svc)
+    docs_mod.replace_text("A" * 30, "**bold**", match="alpha", markdown=True, confirm=True)
+    kinds = [next(iter(r)) for r in _reqs(svc)]
+    assert kinds == ["deleteContentRange", "insertText", "updateTextStyle"]
+    assert _reqs(svc)[2]["updateTextStyle"]["range"] == {"startIndex": 6, "endIndex": 10, "tabId": "t.0"}
+
+
+def test_replace_text_rejects_pipe_tables(monkeypatch):
+    svc = _locator_svc(_doc_body())
+    monkeypatch.setattr(docs_mod, "docs", lambda: svc)
+    with pytest.raises(RuntimeError, match="insert_table"):
+        docs_mod.replace_text("A" * 30, "| a | b |\n| --- | --- |", match="alpha", markdown=True, confirm=True)
+    assert not svc.documents.return_value.batchUpdate.called
+
+
+def test_replace_text_with_empty_string_only_deletes(monkeypatch):
+    svc = _locator_svc(_doc_body())
+    monkeypatch.setattr(docs_mod, "docs", lambda: svc)
+    docs_mod.replace_text("A" * 30, "", match="alpha", confirm=True)
+    assert [next(iter(r)) for r in _reqs(svc)] == ["deleteContentRange"]  # empty insertText is rejected by the API
+
+
+# ---- locator anchors on the insert tools ------------------------------------------------
+
+def test_insert_text_after_anchors_at_match_end(monkeypatch):
+    svc = _locator_svc(_doc_body())
+    monkeypatch.setattr(docs_mod, "docs", lambda: svc)
+    out = docs_mod.insert_text("A" * 30, "!", after="alpha")
+    assert out["inserted_at"] == 11
+    assert _reqs(svc)[0]["insertText"]["location"]["index"] == 11
+
+
+def test_insert_text_before_anchors_at_match_start(monkeypatch):
+    svc = _locator_svc(_doc_body())
+    monkeypatch.setattr(docs_mod, "docs", lambda: svc)
+    assert docs_mod.insert_text("A" * 30, "!", before="alpha")["inserted_at"] == 6
+
+
+def test_insert_text_block_markdown_snaps_to_paragraph_boundary(monkeypatch):
+    svc = _locator_svc(_doc_body())
+    monkeypatch.setattr(docs_mod, "docs", lambda: svc)
+    # 'alpha' sits mid-paragraph; a heading anchored there would restyle the host paragraph,
+    # so block content snaps to the end of the containing paragraph instead.
+    assert docs_mod.insert_text("A" * 30, "# H", after="alpha", markdown=True)["inserted_at"] == 17
+
+
+def test_insert_text_rejects_multiple_or_missing_anchors(monkeypatch):
+    svc = _locator_svc(_doc_body())
+    monkeypatch.setattr(docs_mod, "docs", lambda: svc)
+    with pytest.raises(RuntimeError, match="only one of"):
+        docs_mod.insert_text("A" * 30, "x", index=1, after="alpha")
+    with pytest.raises(RuntimeError, match="pass one of"):
+        docs_mod.insert_text("A" * 30, "x")
+    assert not svc.documents.return_value.batchUpdate.called
+
+
+def test_insert_text_unmatched_locator_raises_before_writing(monkeypatch):
+    svc = _locator_svc(_doc_body())
+    monkeypatch.setattr(docs_mod, "docs", lambda: svc)
+    with pytest.raises(RuntimeError, match="no match"):
+        docs_mod.insert_text("A" * 30, "x", after="absent")
+    assert not svc.documents.return_value.batchUpdate.called
+
+
+def test_block_anchor_inside_a_table_cell_is_refused(monkeypatch):
+    cell = {"content": [_para(4, "in-cell")]}
+    body = [{"startIndex": 1, "endIndex": 13, "table": {"tableRows": [{"tableCells": [cell]}]}},
+            _para(13, "outside\n")]
+    svc = _locator_svc(body)
+    monkeypatch.setattr(docs_mod, "docs", lambda: svc)
+    with pytest.raises(RuntimeError, match="inside a table cell"):
+        docs_mod.insert_table("A" * 30, [["x"]], after="in-cell")
+    with pytest.raises(RuntimeError, match="inside a table cell"):
+        docs_mod.insert_text("A" * 30, "# H", after="in-cell", markdown=True)
+    # inline text has no boundary requirement, so it still anchors inside the cell
+    assert docs_mod.insert_text("A" * 30, "!", after="in-cell")["inserted_at"] == 11
+
+
+def test_delete_text_section_at_end_of_doc_stops_before_final_newline(monkeypatch):
+    body = [_para(1, "Only\n", style="HEADING_1"), _para(6, "tail\n")]
+    svc = _locator_svc(body)
+    monkeypatch.setattr(docs_mod, "docs", lambda: svc)
+    docs_mod.delete_text("A" * 30, section="Only", confirm=True)
+    rng = _reqs(svc)[0]["deleteContentRange"]["range"]
+    assert rng["endIndex"] == body[-1]["endIndex"] - 1  # the body's final newline is undeletable
+
+
+def test_write_omits_write_control_when_the_api_returns_no_revision(monkeypatch):
+    svc = _locator_svc(_doc_body(), revision=None)
+    monkeypatch.setattr(docs_mod, "docs", lambda: svc)
+    docs_mod.delete_text("A" * 30, match="alpha", confirm=True)
+    # sending requiredRevisionId=None would be rejected outright; omit the key instead
+    assert "writeControl" not in _body_arg(svc)
+
+
+def test_insert_table_after_resolves_to_a_paragraph_boundary(monkeypatch):
+    body = _doc_body()
+    svc = _locator_svc(body)
+    monkeypatch.setattr(docs_mod, "docs", lambda: svc)
+    out = docs_mod.insert_table("A" * 30, [["a"]], after="alpha", dry_run=True)
+    # end of the paragraph holding the match -> a boundary insertTable accepts, so the
+    # mid-paragraph 400 remap path is never reached
+    assert out["at_index"] == 17
+    assert out["at_index"] in {el["startIndex"] for el in body} | {docs_mod.locate.body_end(body)}
 
 
 if __name__ == "__main__":
