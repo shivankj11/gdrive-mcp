@@ -205,3 +205,110 @@ def _para_style(rng: dict, named_style: str) -> dict:
             "fields": "namedStyleType",
         }
     }
+
+
+# ---- pipe tables (Option B) --------------------------------------------------
+# Markdown is split into ordered text/table segments. A table is a pipe row immediately
+# followed by a delimiter row (GFM) — requiring the delimiter keeps a lone '| a | b |' line
+# literal text, so table parsing never changes existing table-free markdown writes. '\|' is the
+# one escape the dialect honors, and only inside table cells, so a cell can carry a literal '|'
+# (this closes the read->write loop with the reader, which emits '\|' for pipes in cell text).
+
+_DELIM_CELL_RE = re.compile(r"^:?-+:?$")
+_UNESCAPED_PIPE_RE = re.compile(r"(?<!\\)\|")
+
+
+def _has_pipe(line: str) -> bool:
+    return _UNESCAPED_PIPE_RE.search(line) is not None
+
+
+def split_row(line: str) -> list[str]:
+    """A pipe-table row -> cells: split on unescaped '|', drop the bounding empties, unescape '\\|'."""
+    parts = _UNESCAPED_PIPE_RE.split(line.strip())
+    if parts and parts[0].strip() == "":
+        parts = parts[1:]
+    if parts and parts[-1].strip() == "":
+        parts = parts[:-1]
+    return [p.strip().replace("\\|", "|") for p in parts]
+
+
+def _is_delimiter(line: str) -> bool:
+    if not _has_pipe(line):
+        return False
+    cells = split_row(line)
+    return bool(cells) and all(_DELIM_CELL_RE.match(c) for c in cells)
+
+
+def split_blocks(md: str) -> list[tuple[str, object]]:
+    """Split markdown into ordered ('text', str) and ('table', rows) segments.
+
+    `rows` is list[list[str]] of raw cell source (inline markup preserved for later styling);
+    body rows are padded/truncated to the header's column count. A single-row table (header +
+    delimiter, no body rows) yields exactly one row. Text runs between tables are joined with
+    newlines; empty runs are still emitted and skipped by the renderer.
+    """
+    lines = md.split("\n")
+    n = len(lines)
+    segments: list[tuple[str, object]] = []
+    buf: list[str] = []
+    i = 0
+    while i < n:
+        if _has_pipe(lines[i]) and i + 1 < n and _is_delimiter(lines[i + 1]):
+            if buf:
+                segments.append(("text", "\n".join(buf)))
+                buf = []
+            header = split_row(lines[i])
+            ncols = len(header)
+            rows = [header]
+            i += 2  # consume header + delimiter
+            while i < n and _has_pipe(lines[i]) and not _is_delimiter(lines[i]):
+                cells = split_row(lines[i])
+                if len(cells) < ncols:
+                    cells += [""] * (ncols - len(cells))
+                elif len(cells) > ncols:
+                    cells = cells[:ncols]
+                rows.append(cells)
+                i += 1
+            segments.append(("table", rows))
+        else:
+            buf.append(lines[i])
+            i += 1
+    if buf:
+        segments.append(("text", "\n".join(buf)))
+    return segments
+
+
+def has_table(segments: list[tuple[str, object]]) -> bool:
+    return any(kind == "table" for kind, _ in segments)
+
+
+def parse_cell(src: str) -> tuple[str, list[tuple[int, int, tuple[str, ...]]]]:
+    """A table cell's source -> (plain text, inline style spans) — same inline dialect as prose."""
+    return _parse_inline(src)
+
+
+def escape_cell(value: object) -> str:
+    """Render one cell value for markdown output: flatten newlines, escape '|' so it stays one cell."""
+    return ("" if value is None else str(value)).replace("\n", " ").replace("|", "\\|")
+
+
+def render_table_markdown(rows: list[list[object]]) -> str:
+    """Rows -> a GFM pipe table (header + column-matched delimiter + body), cells escaped."""
+    ncols = len(rows[0]) if rows else 0
+    out: list[str] = []
+    for r, row in enumerate(rows):
+        out.append("| " + " | ".join(escape_cell(c) for c in row) + " |")
+        if r == 0:
+            out.append("| " + " | ".join(["---"] * ncols) + " |")
+    return "\n".join(out)
+
+
+def render_markdown_preview(segments: list[tuple[str, object]]) -> str:
+    """A plain-text preview of segmented markdown (tables shown as pipe rows) for dry-run."""
+    parts: list[str] = []
+    for kind, payload in segments:
+        if kind == "table":
+            parts.append(render_table_markdown(payload))
+        else:
+            parts.append(parse_markdown(payload).text)
+    return "\n".join(p for p in parts if p)

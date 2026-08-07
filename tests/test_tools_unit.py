@@ -214,15 +214,20 @@ def test_content_to_markdown_headings_and_table():
         {"paragraph": {"elements": [{"textRun": {"content": "body text\n"}}]}},
         {"table": {"tableRows": [
             {"tableCells": [
-                {"content": [{"paragraph": {"elements": [{"textRun": {"content": "a"}}]}}]},
+                {"content": [{"paragraph": {"elements": [{"textRun": {"content": "a | x"}}]}}]},
                 {"content": [{"paragraph": {"elements": [{"textRun": {"content": "b"}}]}}]},
-            ]}
+            ]},
+            {"tableCells": [
+                {"content": [{"paragraph": {"elements": [{"textRun": {"content": "1"}}]}}]},
+                {"content": [{"paragraph": {"elements": [{"textRun": {"content": "2"}}]}}]},
+            ]},
         ]}},
     ]
     md, outline = _content_to_markdown(content)
     assert "# Title" in md
     assert "body text" in md
-    assert "| a | b |" in md
+    # GFM: header row, a column-matched delimiter row, then the body row; '|' in a cell is escaped
+    assert "| a \\| x | b |\n| --- | --- |\n| 1 | 2 |" in md
     assert outline == [{"level": 1, "text": "Title"}]
 
 

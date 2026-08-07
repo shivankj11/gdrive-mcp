@@ -4,11 +4,11 @@ A read/write MCP for Google Drive, Docs & Sheets that fixes what trips agents on
 
 > Conventions: every tool takes its target as **`item`** (a URL or ID); unknown args are rejected; destructive tools (ᶜ) return an impact preview unless called with `confirm=true`.
 >
-> **Dry-run (edit-only):** the edit tools for *existing* files — `append_text`, `insert_text`, `write_sheet`, `append_rows`, `format_cells`, `clear_range`, `delete_rows` — accept `dry_run=true`, returning a predicted before/after **without writing** (client-side; `write_sheet` shows formula cells literally, so Google's recalculation isn't simulated, and Docs `insert_text` reports the insertion point rather than a merged string). Dry-runs are still subject to the verification gate.
+> **Dry-run (edit-only):** the edit tools for *existing* files — `append_text`, `insert_text`, `insert_table`, `write_sheet`, `append_rows`, `format_cells`, `clear_range`, `delete_rows` — accept `dry_run=true`, returning a predicted before/after **without writing** (client-side; `write_sheet` shows formula cells literally, so Google's recalculation isn't simulated, and Docs `insert_text` reports the insertion point rather than a merged string). Dry-runs are still subject to the verification gate.
 >
 > **Colored text (opt-in):** `append_text`/`insert_text` take an optional `color` (hex, e.g. `#3366CC`) applied *only when explicitly passed* — unset = plain text. `read_document(include_colors=true)` returns `colored_runs` (spans with an explicit foreground color).
 >
-> **Formatted writes (opt-in):** `append_text`/`insert_text`/`create_document` accept `markdown=true`, rendering a small dialect — `#`…`######` headings, `-`/`*` bullets, `1.` numbered lists (nest with two spaces or a tab per level), `**bold**`, `*italic*`, `<u>underline</u>` — with no escape syntax (leave unset to store text verbatim). In Sheets, `format_cells` sets bold/italic/underline on a cell range without touching values.
+> **Formatted writes (opt-in):** `append_text`/`insert_text`/`create_document` accept `markdown=true`, rendering a small dialect — `#`…`######` headings, `-`/`*` bullets, `1.` numbered lists (nest with two spaces or a tab per level), `**bold**`, `*italic*`, `<u>underline</u>`, and **GFM pipe tables** (a header row immediately followed by a `| --- | --- |` delimiter row — a lone `| a | b |` line with no delimiter stays literal text). The only escape is `\|` for a literal pipe **inside a table cell**; otherwise text that looks like markup gets styled (leave `markdown` unset to store text verbatim). Table round-trip preserves structure and plain cell text — cell emphasis and multi-paragraph cells are not preserved on read. In Sheets, `format_cells` sets bold/italic/underline on a cell range without touching values.
 >
 > **Local-file sandbox:** all local file I/O is confined to `GDRIVE_MCP_FILES_DIR` (default a private `0700` dir under the config dir) — `download_file`/`export_file`/`read_full_sheet` write there (relative `dest_path`; absolute paths and `..` rejected, files `0600`), and `upload_file(source_path)` reads only from there. This stops a prompt-injected agent from writing to `~/.ssh` or exfiltrating arbitrary local files to Drive. Fetched Doc images are pulled only from Google hosts (the OAuth token is never sent elsewhere).
 >
@@ -30,6 +30,7 @@ A read/write MCP for Google Drive, Docs & Sheets that fixes what trips agents on
 - **`create_document`** — create a new Doc, optionally with initial content (`markdown=true` for formatted).
 - **`append_text`** — append text to the end of a Doc, targeting a chosen tab (`markdown=true` for headings/lists/bold/italic/underline).
 - **`insert_text`** — insert text at a character index, targeting a chosen tab (`markdown=true` as above).
+- **`insert_table`** — insert a table filled from a `rows` grid (append or at an `index`; `header=true` bolds the first row).
 - **`read_comments`** — list a doc/file's comments and replies.
 - **`add_comment`** — add an (unanchored) comment.
 
