@@ -1,0 +1,58 @@
+[package]
+name = "gdrive-mcp"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+description = "Google Drive / Docs / Sheets MCP (read/write) for agents — browser-OAuth, local stdio."
+readme = "../README.md"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "gdrive-mcp"
+path = "src/main.rs"
+
+[lib]
+name = "gdrive_mcp"
+path = "src/lib.rs"
+
+[dependencies]
+# MCP protocol: stdio server + elicitation (the verification gate's user prompt).
+rmcp = { version = "3.1", features = ["server", "transport-io", "elicitation"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "fs", "net", "time", "sync", "signal"] }
+async-trait = "0.1"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+schemars = "1"
+
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "charset", "http2"] }
+
+anyhow = "1"
+thiserror = "2"
+clap = { version = "4", features = ["derive"] }
+regex = "1"
+# The markdown dialect's inline rules use lookaround (`(?<!\s)`, `(?!\w)`), which the `regex`
+# crate deliberately does not support; fancy-regex backtracks and does.
+fancy-regex = "0.19"
+base64 = "0.22"
+csv = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+url = "2"
+percent-encoding = "2"
+uuid = { version = "1", features = ["v4"] }
+pdf-extract = "0.12"
+# `MediaFileUpload` guessed an upload's MIME type from its filename; this is that guess.
+mime_guess = "2"
+
+[dev-dependencies]
+http = "1"
+tempfile = "3"
+# The integration test drives the server through a real in-memory MCP client, which is the only
+# way to exercise the registered path: annotations, schema strictness, and the elicitation gate.
+rmcp = { version = "3.1", features = ["client"] }
+tokio = { version = "1", features = ["macros", "rt"] }
+
+[profile.release]
+lto = "thin"
+strip = true

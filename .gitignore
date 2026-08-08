@@ -7,6 +7,9 @@ build/
 *.egg-info/
 .DS_Store
 
+# Rust
+rust/target/
+
 # OAuth credentials — never commit the plaintext
 oauth_client.json
 gcp-oauth.keys.json

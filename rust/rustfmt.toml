@@ -1,0 +1,5 @@
+# The Python original wraps at 100 and keeps short dict/call literals on one line; these two
+# settings are what make `cargo fmt` preserve the same shape here instead of exploding every
+# small `json!({...})` and struct literal across five lines.
+max_width = 110
+use_small_heuristics = "Max"

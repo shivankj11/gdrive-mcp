@@ -86,6 +86,53 @@ You authenticate as **yourself**, so the server can only reach what your own Goo
 claude mcp add gdrive -- uv run --directory /path/to/gdrive-mcp gdrive-mcp serve
 ```
 
+## Rust implementation (`rust/`)
+
+`rust/` holds a second, self-contained implementation of the same server — same 29 tools, same
+argument names, same result shapes, same confirm/dry-run/locator/gate semantics — as a single
+static binary with no Python runtime. The two are interchangeable: they read the **same**
+`~/.config/gdrive-mcp/oauth_client.json` and write the **same** `token.json` (byte-compatible with
+`google-auth`'s format), so authenticating with one authenticates the other, and every
+`GDRIVE_MCP_*` variable in [Configuration](#configuration) means the same thing to both.
+
+```bash
+cargo install --path rust        # or: cargo build --release --manifest-path rust/Cargo.toml
+gdrive-mcp auth                  # one-time browser consent (skip if the Python side already ran it)
+gdrive-mcp whoami                # verify
+claude mcp add gdrive -- gdrive-mcp serve
+```
+
+Notable differences, all internal:
+
+- **Google APIs are called directly over REST** (`reqwest`) instead of through a discovery
+  document, behind a `GoogleApi` trait so the tool tests run against a recording fake.
+- **MCP is served by [`rmcp`]**, the official Rust SDK; the verification gate prompts through its
+  elicitation support, and `tests/server_integration.rs` drives the registered path with a real
+  in-memory MCP client (annotations, strict schemas, and every accept/decline/no-prompt branch).
+- **Argument handling reproduces both of FastMCP's layers**, not just the strict one: unknown
+  arguments are rejected (`extra="forbid"`), *and* a list sent as a JSON string or a boolean sent
+  as `"true"` is coerced the way pydantic's lax mode did, because MCP clients really send those.
+- **PDF text extraction** uses `pdf-extract` rather than `pypdf`, so extracted text may differ in
+  whitespace for unusual PDFs.
+- **The markdown dialect's inline rules need lookaround**, which Rust's default `regex` engine
+  does not support, so `md.rs` uses `fancy-regex` for exactly those two patterns — with `\w` and
+  `\s` spelled out, since the two engines define them differently.
+
+Known behavioural divergences, both confined to how a spilled filename is spelled: A1 cells accept
+only ASCII digits (Python's `\d` also matched other Unicode digits), and `localfs`'s filename
+sanitiser keeps Unicode combining marks where Python replaced them with `_`. Neither affects
+containment or content.
+
+```bash
+cargo test --manifest-path rust/Cargo.toml     # unit + integration tests, no credentials needed
+python3 scripts/diff_tool_surface.py           # both servers advertise an identical tool surface
+```
+
+[`rmcp`]: https://crates.io/crates/rmcp
+
+See [`VERIFICATION.md`](VERIFICATION.md) for what each implementation's tests actually pin, and for
+the live credentialed runs.
+
 ## Configuration
 
 | Env var | Default | Purpose |
