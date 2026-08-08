@@ -188,8 +188,11 @@ def test_matching_is_case_sensitive_and_offers_no_folding_option():
     body = [para(1, "Needle\n")]
     assert find_matches(body, "needle") == []
     assert find_matches(body, "Needle") == [(1, 7)]
-    for tool in (docs_mod.delete_text, docs_mod.replace_text):
-        assert "match_case" not in inspect.signature(tool).parameters
+    # All four locator tools: insert_text / insert_table take the same substrings via after=/before=,
+    # so a folding option added to any of them would shift offsets the same way.
+    for tool in (docs_mod.delete_text, docs_mod.replace_text, docs_mod.insert_text,
+                 docs_mod.insert_table):
+        assert "match_case" not in inspect.signature(tool).parameters, tool.__name__
 
 
 def test_empty_needle_is_rejected():

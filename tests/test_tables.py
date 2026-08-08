@@ -64,6 +64,23 @@ def test_split_blocks_pads_and_truncates_body_rows():
     assert segs == [("table", [["a", "b", "c"], ["1", "", ""], ["1", "2", "3"]])]
 
 
+def test_split_blocks_keeps_cell_markup_for_parse_cell():
+    # split_blocks hands back RAW cell source — inline markup is NOT parsed there, because each
+    # cell is styled later against its own insertion index. md.parse_cell does that half, and its
+    # spans are offsets into that one cell's text (UTF-16 units, like every Docs index).
+    segs = md.split_blocks("| **b** | x _i_ |\n| --- | --- |\n| a**b** | 😀_i_ |")
+    assert segs == [("table", [["**b**", "x _i_"], ["a**b**", "😀_i_"]])]
+    (_kind, rows), = segs
+    assert md.parse_cell(rows[0][0]) == ("b", [(0, 1, ("bold",))])
+    assert md.parse_cell(rows[0][1]) == ("x i", [(2, 3, ("italic",))])
+    assert md.parse_cell(rows[1][0]) == ("ab", [(1, 2, ("bold",))])
+    assert md.parse_cell(rows[1][1]) == ("😀i", [(2, 3, ("italic",))])  # emoji = 2 units, not 1
+    # the same dialect as prose, not a table-only subset: identical text and spans
+    assert md.parse_cell("***bi*** <u>u</u>") == (
+        md.parse_markdown("***bi*** <u>u</u>").text, md.parse_markdown("***bi*** <u>u</u>").spans
+    )
+
+
 def test_split_row_honors_escaped_pipe():
     # '\|' is not a delimiter; it decodes to a literal '|' inside the cell
     assert md.split_row(r"| a \| b | c |") == ["a | b", "c"]
@@ -245,6 +262,30 @@ def test_append_text_markdown_table_uses_segmented_path(monkeypatch):
     assert inserts == [
         {"location": {"index": 4, "tabId": "t.0"}, "text": "a"},
         {"location": {"index": 7, "tabId": "t.0"}, "text": "b"},  # b@6 + offset 1
+    ]
+
+
+def test_append_text_markdown_table_styles_cells_at_their_own_offsets(monkeypatch):
+    # A cell's inline markup becomes styled spans based on THAT cell's insertion index (post-shift),
+    # not the table start and not a running text offset: '| **b** | x _i_ |' bolds only the first
+    # cell's single char and italicises only the 'i' at the second cell's offset 2.
+    para = {"paragraph": {"elements": [{"textRun": {"content": "hi\n"}}]}, "endIndex": 4}
+    new_table = {"startIndex": 3, "endIndex": 15, "table": {"tableRows": [
+        {"tableCells": [{"content": [{"startIndex": 4, "paragraph": {}}]},
+                        {"content": [{"startIndex": 6, "paragraph": {}}]}]}]}}
+    svc = _insert_table_svc([_tab_doc([para]), _tab_doc([para]), _tab_doc([para, new_table])])
+    monkeypatch.setattr(docs_mod, "docs", lambda: svc)
+
+    docs_mod.append_text(SID, "| **b** | x _i_ |\n| --- | --- |", markdown=True)
+    fill = svc.documents.return_value.batchUpdate.call_args_list[1].kwargs["body"]["requests"]
+    assert fill == [
+        {"insertText": {"location": {"index": 4, "tabId": "t.0"}, "text": "b"}},
+        {"updateTextStyle": {"range": {"startIndex": 4, "endIndex": 5, "tabId": "t.0"},
+                             "textStyle": {"bold": True}, "fields": "bold"}},
+        # 'x i' at 6+1 (one char already inserted above); the italic span sits at 7+2, inside it
+        {"insertText": {"location": {"index": 7, "tabId": "t.0"}, "text": "x i"}},
+        {"updateTextStyle": {"range": {"startIndex": 9, "endIndex": 10, "tabId": "t.0"},
+                             "textStyle": {"italic": True}, "fields": "italic"}},
     ]
 
 
