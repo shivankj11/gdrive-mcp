@@ -146,8 +146,10 @@ def write_sheet(
 
     value_input RAW (default) stores cell text literally; pass 'USER_ENTERED' to interpret typed
     values/formulas (a leading '=' becomes a live formula). Overwriting existing non-empty cells
-    requires confirm=true. dry_run=true returns a predicted before/after (client-side) without
-    writing; formula cells are shown literally (Google's recalculation is not simulated).
+    requires confirm=true; the target is inspected as formulas, so a cell holding a formula counts
+    as non-empty even when it currently evaluates to an empty string. dry_run=true returns a
+    predicted before/after (client-side) without writing; `before` shows a formula cell as its
+    formula text, and Google's recalculation of `after` is not simulated.
     """
     sid = parse_ref(item).id
     svc = sheets()
@@ -158,7 +160,11 @@ def write_sheet(
     existing = (
         svc.spreadsheets()
         .values()
-        .get(spreadsheetId=sid, range=target, valueRenderOption="UNFORMATTED_VALUE")
+        # FORMULA, not UNFORMATTED_VALUE: a cell whose formula evaluates to the empty string
+        # (`=IF(x,"",y)`, a lookup that misses) renders as "" under UNFORMATTED_VALUE, so
+        # _count_nonempty read it as empty, the gate did not fire, and a confirm-less write
+        # destroyed the formula. Formula *text* is never empty, so the gate fires.
+        .get(spreadsheetId=sid, range=target, valueRenderOption="FORMULA")
         .execute()
         .get("values", [])
     )

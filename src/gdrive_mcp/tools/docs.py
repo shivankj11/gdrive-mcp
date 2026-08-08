@@ -720,8 +720,11 @@ def delete_text(
 
     Pass exactly one locator: `match` (a literal substring, case-sensitive, must lie within a
     single paragraph) or `section` (a heading's exact text — removes that heading and everything
-    under it, up to the next heading of the same or higher level). For `match`, `occurrence` is
-    1-based and defaults to the first; pass occurrence=0 to delete every occurrence.
+    under it, up to the next heading of the same or higher level). Locators match the document's
+    plain text, not the markdown `read_document` renders: a heading that reads back as '# Title'
+    matches only as 'Title', and a table cell's escaped '\\|' only as '|', so strip that rendering
+    out of a locator copied from a read. For `match`, `occurrence` is 1-based and defaults to the
+    first; pass occurrence=0 to delete every occurrence.
 
     Multi-tab docs: pass a `tab` id (or an `item` URL with `tab=t.xxxx`), else the first tab.
     dry_run=true reports exactly what would be removed without writing. This tool is destructive:
@@ -767,8 +770,11 @@ def replace_text(
 
     Locators work exactly as in `delete_text`: exactly one of `match` (literal, case-sensitive,
     within one paragraph) or `section` (a heading and its content), with 1-based `occurrence`
-    over a match (0 = every occurrence). markdown=true renders `replacement` in the same dialect
-    as `append_text` minus pipe tables (use `insert_table` for those).
+    over a match (0 = every occurrence). Locators match the document's plain text, not the
+    markdown `read_document` renders: a heading that reads back as '# Title' matches only as
+    'Title', and a table cell's escaped '\\|' only as '|', so strip that rendering out of a
+    locator copied from a read. markdown=true renders `replacement` in the same dialect as
+    `append_text` minus pipe tables (use `insert_table` for those).
 
     Each occurrence is deleted and rewritten in a single batch, so the doc is never left with the
     old text removed and the new text missing. Multi-tab docs: pass a `tab` id (or an `item` URL

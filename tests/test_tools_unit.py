@@ -46,6 +46,30 @@ def test_write_sheet_gates_on_overwrite(monkeypatch):
     assert not svc.spreadsheets.return_value.values.return_value.update.called
 
 
+def test_write_sheet_gate_inspects_formulas_so_one_rendering_empty_still_trips_it(monkeypatch):
+    # Under UNFORMATTED_VALUE a formula evaluating to "" comes back as "", _count_nonempty reads the
+    # target as empty, the gate does not fire, and a confirm-less write destroys the formula.
+    # Reading FORMULA is what closes that: formula *text* is never empty.
+    svc = _sheets_svc(existing_values=[['=IF(A9=1,"","x")']])
+    monkeypatch.setattr(sheets_mod, "sheets", lambda: svc)
+    out = sheets_mod.write_sheet(SID, "Data", [["new"]], confirm=False)
+    kwargs = svc.spreadsheets.return_value.values.return_value.get.call_args.kwargs
+    assert kwargs["valueRenderOption"] == "FORMULA"
+    assert out["status"] == "confirmation_required"
+    assert out["impact"]["overwrites_nonempty_cells"] == 1
+    assert not svc.spreadsheets.return_value.values.return_value.update.called
+
+
+def test_write_sheet_dry_run_shows_a_formula_cell_as_its_formula(monkeypatch):
+    # The same read feeds `before`, so a caller deciding whether to overwrite sees the formula it
+    # would destroy rather than the value that formula happened to produce.
+    svc = _sheets_svc(existing_values=[["=SUM(B:B)"]])
+    monkeypatch.setattr(sheets_mod, "sheets", lambda: svc)
+    out = sheets_mod.write_sheet(SID, "Data", [["x"]], dry_run=True)
+    assert out["before"] == [["=SUM(B:B)"]]
+    assert out["overwrites_nonempty_cells"] == 1
+
+
 def test_write_sheet_executes_with_confirm(monkeypatch):
     svc = _sheets_svc(existing_values=[["a", "b"]])
     monkeypatch.setattr(sheets_mod, "sheets", lambda: svc)
@@ -669,6 +693,31 @@ def test_replace_text_gates_then_replaces_in_one_batch(monkeypatch):
     assert _reqs(svc)[1]["insertText"] == {"location": {"index": 6, "tabId": "t.0"}, "text": "beta"}
 
 
+def test_replace_text_dry_run_neither_writes_nor_gates(monkeypatch):
+    svc = _locator_svc(_doc_body())
+    monkeypatch.setattr(docs_mod, "docs", lambda: svc)
+    out = docs_mod.replace_text("A" * 30, "beta", match="alpha", dry_run=True)
+    assert out["dry_run"] is True and "status" not in out  # dry-run explores; confirm gates
+    assert out["replaces_text"] == ["alpha"] and out["with_text"] == "beta"
+    assert not svc.documents.return_value.batchUpdate.called
+
+
+def test_replace_text_all_occurrences_pair_each_delete_with_its_own_insert(monkeypatch):
+    svc = _locator_svc(_doc_body())
+    monkeypatch.setattr(docs_mod, "docs", lambda: svc)
+    docs_mod.replace_text("A" * 30, "beta", match="alpha", occurrence=0, confirm=True)
+    assert svc.documents.return_value.batchUpdate.call_count == 1  # one batch, never a partial rewrite
+    reqs = _reqs(svc)
+    # paired per range, not grouped into all-deletes-then-all-inserts
+    assert [next(iter(r)) for r in reqs] == [
+        "deleteContentRange", "insertText", "deleteContentRange", "insertText",
+    ]
+    deleted = [r["deleteContentRange"]["range"]["startIndex"] for r in reqs if "deleteContentRange" in r]
+    inserted = [r["insertText"]["location"]["index"] for r in reqs if "insertText" in r]
+    assert deleted == [17, 6]  # bottom-up keeps the earlier range valid
+    assert inserted == deleted  # each insert rewrites the range deleted just before it
+
+
 def test_replace_text_markdown_styles_land_on_the_new_text(monkeypatch):
     svc = _locator_svc(_doc_body())
     monkeypatch.setattr(docs_mod, "docs", lambda: svc)
@@ -691,6 +740,18 @@ def test_replace_text_with_empty_string_only_deletes(monkeypatch):
     monkeypatch.setattr(docs_mod, "docs", lambda: svc)
     docs_mod.replace_text("A" * 30, "", match="alpha", confirm=True)
     assert [next(iter(r)) for r in _reqs(svc)] == ["deleteContentRange"]  # empty insertText is rejected by the API
+
+
+def test_replace_text_pins_the_resolved_revision(monkeypatch):
+    svc = _locator_svc(_doc_body())
+    monkeypatch.setattr(docs_mod, "docs", lambda: svc)
+    docs_mod.replace_text("A" * 30, "beta", match="alpha", confirm=True)
+    assert _body_arg(svc)["writeControl"] == {"requiredRevisionId": "rev-1"}
+
+    norev = _locator_svc(_doc_body(), revision=None)
+    monkeypatch.setattr(docs_mod, "docs", lambda: norev)
+    docs_mod.replace_text("A" * 30, "beta", match="alpha", confirm=True)
+    assert "writeControl" not in _body_arg(norev)  # requiredRevisionId=None would be rejected outright
 
 
 # ---- locator anchors on the insert tools ------------------------------------------------
@@ -775,6 +836,361 @@ def test_insert_table_after_resolves_to_a_paragraph_boundary(monkeypatch):
     # mid-paragraph 400 remap path is never reached
     assert out["at_index"] == 17
     assert out["at_index"] in {el["startIndex"] for el in body} | {docs_mod.locate.body_end(body)}
+
+
+# ---- discovery: resolve_link / get_metadata ---------------------------------------------
+
+def _drive_get_svc(meta: dict):
+    svc = MagicMock()
+    svc.files.return_value.get.return_value.execute.return_value = meta
+    return svc
+
+
+def test_resolve_link_slims_the_response_and_sends_the_parsed_id(monkeypatch):
+    svc = _drive_get_svc({
+        "id": "F1",
+        "name": "Q3 Plan",
+        "mimeType": "application/vnd.google-apps.document",
+        "modifiedTime": "2026-01-02T03:04:05Z",
+        "size": "1234",
+        "webViewLink": "https://docs.google.com/document/d/F1/edit",
+        "owners": [{"displayName": "A", "emailAddress": "a@example.com"}],
+        "parents": ["P1"],
+    })
+    monkeypatch.setattr(disc, "drive", lambda: svc)
+    out = disc.resolve_link(f"https://docs.google.com/document/d/{'D' * 30}/edit")
+    assert out["id"] == "F1" and out["name"] == "Q3 Plan" and out["kind"] == "document"
+    assert out["modified"] == "2026-01-02T03:04:05Z" and out["size"] == "1234"
+    assert out["web_view_link"] == "https://docs.google.com/document/d/F1/edit"
+    assert "owners" not in out and "parents" not in out  # the verbose fields are dropped
+    kwargs = svc.files.return_value.get.call_args.kwargs
+    assert kwargs["fileId"] == "D" * 30  # the id parsed out of the URL, not the URL
+    assert kwargs["supportsAllDrives"] is True  # so shared-drive items resolve too
+    assert "owners(displayName,emailAddress)" in kwargs["fields"]  # mask survives its line break
+
+
+def test_resolve_link_kinds_only_the_mime_types_it_knows(monkeypatch):
+    for mime, kind in [
+        ("application/vnd.google-apps.spreadsheet", "spreadsheet"),
+        ("application/vnd.google-apps.folder", "folder"),
+        ("application/pdf", "file"),  # anything else is just a file
+    ]:
+        svc = _drive_get_svc({"id": "X", "mimeType": mime})
+        monkeypatch.setattr(disc, "drive", lambda: svc)
+        assert disc.resolve_link("A" * 30)["kind"] == kind
+
+
+def test_get_metadata_returns_drives_response_verbatim(monkeypatch):
+    raw = {
+        "id": "F1", "name": "Q3 Plan", "mimeType": "application/pdf",
+        "owners": [{"displayName": "A", "emailAddress": "a@example.com"}], "parents": ["P1"],
+        "createdTime": "2026-01-01T00:00:00Z", "shared": True, "trashed": False,
+    }
+    svc = _drive_get_svc(raw)
+    monkeypatch.setattr(disc, "drive", lambda: svc)
+    assert disc.get_metadata("A" * 30) == raw  # unlike resolve_link, nothing is slimmed away
+    kwargs = svc.files.return_value.get.call_args.kwargs
+    assert kwargs["fields"].endswith(", createdTime, description, shared, trashed")
+    assert kwargs["supportsAllDrives"] is True
+
+
+# ---- comments ---------------------------------------------------------------------------
+
+def _comments_svc(listed: dict | None = None, created: dict | None = None):
+    svc = MagicMock()
+    svc.comments.return_value.list.return_value.execute.return_value = listed if listed is not None else {}
+    svc.comments.return_value.create.return_value.execute.return_value = created or {"id": "cmt-1"}
+    return svc
+
+
+def test_read_comments_clamps_page_size_and_surfaces_the_next_token(monkeypatch):
+    svc = _comments_svc(listed={"comments": [{"id": "c1"}], "nextPageToken": "TOK"})
+    monkeypatch.setattr(docs_mod, "drive", lambda: svc)
+    out = docs_mod.read_comments("A" * 30, page_size=5000, page_token="prev")
+    assert out["file_id"] == "A" * 30 and out["comments"] == [{"id": "c1"}]
+    assert out["has_more"] is True and out["next_page_token"] == "TOK"
+    kwargs = svc.comments.return_value.list.call_args.kwargs
+    assert kwargs["pageSize"] == 100 and kwargs["pageToken"] == "prev"  # Drive caps comments at 100
+    assert "replies(content,author/displayName)" in kwargs["fields"]  # replies ride along with the page
+
+
+def test_read_comments_last_page_reports_no_more(monkeypatch):
+    svc = _comments_svc()  # no comments, no token
+    monkeypatch.setattr(docs_mod, "drive", lambda: svc)
+    out = docs_mod.read_comments("A" * 30, page_size=0)
+    assert out["comments"] == [] and out["has_more"] is False and out["next_page_token"] is None
+    assert svc.comments.return_value.list.call_args.kwargs["pageSize"] == 1  # 0 would be rejected
+
+
+def test_add_comment_posts_the_content_and_returns_the_new_id(monkeypatch):
+    svc = _comments_svc(created={"id": "cmt-1", "content": "hi"})
+    monkeypatch.setattr(docs_mod, "drive", lambda: svc)
+    assert docs_mod.add_comment("A" * 30, "hi") == {"file_id": "A" * 30, "comment_id": "cmt-1"}
+    kwargs = svc.comments.return_value.create.call_args.kwargs
+    assert kwargs["fileId"] == "A" * 30 and kwargs["body"] == {"content": "hi"}
+
+
+# ---- image extraction --------------------------------------------------------------------
+
+def _inline_image(uri: str) -> dict:
+    return {"inlineObjectProperties": {"embeddedObject": {"imageProperties": {"contentUri": uri}}}}
+
+
+def _positioned_image(uri: str) -> dict:
+    return {"positionedObjectProperties": {"embeddedObject": {"imageProperties": {"contentUri": uri}}}}
+
+
+def _image_session(by_uri: dict):
+    """Stub of the OAuth-carrying AuthorizedSession: one canned response per URI."""
+    def get(uri, **_kwargs):
+        content, content_type = by_uri[uri]
+        resp = MagicMock()
+        resp.is_redirect = resp.is_permanent_redirect = False
+        resp.headers = {"content-type": content_type}
+        resp.content = content
+        return resp
+
+    session = MagicMock()
+    session.get.side_effect = get
+    return session
+
+
+def test_extract_images_fetches_only_google_hosts_in_document_order(monkeypatch):
+    doc = {
+        "body": {"content": [{"paragraph": {
+            "positionedObjectIds": ["po1"],
+            "elements": [
+                {"inlineObjectElement": {"inlineObjectId": "evil"}},
+                {"inlineObjectElement": {"inlineObjectId": "io1"}},
+            ],
+        }}]},
+        "inlineObjects": {
+            "evil": _inline_image("https://evil.com/x.png"),
+            "io1": _inline_image("https://lh3.googleusercontent.com/inline"),
+        },
+        "positionedObjects": {"po1": _positioned_image("https://lh3.googleusercontent.com/anchored")},
+    }
+    svc = MagicMock()
+    svc.documents.return_value.get.return_value.execute.return_value = doc
+    session = _image_session({
+        "https://evil.com/x.png": (b"pwned", "image/png"),
+        "https://lh3.googleusercontent.com/anchored": (b"anchored", "image/png"),
+        "https://lh3.googleusercontent.com/inline": (b"inline", "image/jpeg; charset=x"),
+    })
+    monkeypatch.setattr(docs_mod, "docs", lambda: svc)
+    monkeypatch.setattr(docs_mod, "authed_session", lambda: session)
+    images = docs_mod.extract_images("A" * 30)
+    # anchored image first (it is anchored to the paragraph's start), then the paragraph's inline one
+    assert [(i.data, i._mime_type) for i in images] == [(b"anchored", "image/png"), (b"inline", "image/jpeg")]
+    # the fetch carries the user's Drive token, so the non-Google host is never contacted at all
+    assert [c.args[0] for c in session.get.call_args_list] == [
+        "https://lh3.googleusercontent.com/anchored",
+        "https://lh3.googleusercontent.com/inline",
+    ]
+    assert session.get.call_args.kwargs["allow_redirects"] is False  # a redirect could carry it off-host
+
+
+# ---- spreadsheet and tab creation --------------------------------------------------------
+
+def test_create_spreadsheet_names_its_tabs_only_when_asked(monkeypatch):
+    svc = MagicMock()
+    svc.spreadsheets.return_value.create.return_value.execute.return_value = {
+        "spreadsheetId": "NEW", "spreadsheetUrl": "https://example/NEW"
+    }
+    monkeypatch.setattr(sheets_mod, "sheets", lambda: svc)
+    assert sheets_mod.create_spreadsheet("T", tabs=["a", "b"]) == {"id": "NEW", "url": "https://example/NEW"}
+    create = svc.spreadsheets.return_value.create
+    assert create.call_args.kwargs["body"] == {
+        "properties": {"title": "T"},
+        "sheets": [{"properties": {"title": "a"}}, {"properties": {"title": "b"}}],
+    }
+    sheets_mod.create_spreadsheet("T")  # no tabs -> no sheets key, so Sheets makes its default one
+    assert create.call_args.kwargs["body"] == {"properties": {"title": "T"}}
+
+
+def test_add_tab_sends_an_index_only_when_one_was_given(monkeypatch):
+    svc = MagicMock()
+    svc.spreadsheets.return_value.batchUpdate.return_value.execute.return_value = {
+        "replies": [{"addSheet": {"properties": {"sheetId": 7, "title": "New", "index": 2}}}]
+    }
+    monkeypatch.setattr(sheets_mod, "sheets", lambda: svc)
+    assert sheets_mod.add_tab(SID, "New", index=2) == {"sheet_id": 7, "title": "New", "index": 2}
+    batch = svc.spreadsheets.return_value.batchUpdate
+    assert batch.call_args.kwargs["spreadsheetId"] == SID
+    assert batch.call_args.kwargs["body"]["requests"][0]["addSheet"]["properties"] == {
+        "title": "New", "index": 2,
+    }
+    sheets_mod.add_tab(SID, "New")  # no index -> appended, not forced to position 0
+    assert batch.call_args.kwargs["body"]["requests"][0]["addSheet"]["properties"] == {"title": "New"}
+
+
+# ---- file reads: text extraction, download, export ---------------------------------------
+
+# The documented inline/spill threshold, spelled out rather than read from files_mod: taking it
+# from the module would resize these payloads along with it and hide a change to the limit itself.
+_FIVE_MIB = 5 * 1024 * 1024
+
+
+def _files_svc(mime: str, name: str = "f", raw: bytes = b"", exported: bytes = b""):
+    svc = MagicMock()
+    svc.files.return_value.get.return_value.execute.return_value = {
+        "id": "F", "name": name, "mimeType": mime, "size": str(len(raw))
+    }
+    svc.files.return_value.get_media.return_value.execute.return_value = raw
+    svc.files.return_value.export.return_value.execute.return_value = exported
+    return svc
+
+
+def _two_page_pdf() -> bytes:
+    """A two-page PDF built by hand (with a correct xref) so the page count is a real one."""
+    def obj(num: int, body: str) -> str:
+        return f"{num} 0 obj\n{body}\nendobj\n"
+
+    def page(num: int, contents: int) -> str:
+        return obj(num, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents "
+                        f"{contents} 0 R /Resources << /Font << /F1 7 0 R >> >> >>")
+
+    def stream(num: int, word: str) -> str:
+        text = f"BT /F1 24 Tf 20 100 Td ({word}) Tj ET\n"
+        return obj(num, f"<< /Length {len(text)} >>\nstream\n{text}endstream")
+
+    objects = [
+        obj(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+        obj(2, "<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>"),
+        page(3, 4), stream(4, "Hello"), page(5, 6), stream(6, "World"),
+        obj(7, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"),
+    ]
+    out, offsets = "%PDF-1.4\n", []
+    for body in objects:
+        offsets.append(len(out))
+        out += body
+    startxref = len(out)
+    out += f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n"
+    out += "".join(f"{off:010} 00000 n \n" for off in offsets)
+    out += f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{startxref}\n%%EOF\n"
+    return out.encode()
+
+
+def test_read_file_as_text_exports_google_native_files(monkeypatch):
+    svc = _files_svc("application/vnd.google-apps.document", name="Notes", exported=b"para one\n\npara two")
+    monkeypatch.setattr(files_mod, "drive", lambda: svc)
+    out = files_mod.read_file_as_text("A" * 30)
+    assert out["name"] == "Notes" and out["mime_type"] == "application/vnd.google-apps.document"
+    assert out["content"] == "para one\n\npara two" and out["total_chunks"] == 1 and out["has_more"] is False
+    assert svc.files.return_value.export.call_args.kwargs["mimeType"] == "text/plain"
+    assert not svc.files.return_value.get_media.called  # a native file has no bytes to download
+    assert svc.files.return_value.get.call_args.kwargs["supportsAllDrives"] is True
+
+    sheet = _files_svc("application/vnd.google-apps.spreadsheet", exported=b"a,b\n1,2")
+    monkeypatch.setattr(files_mod, "drive", lambda: sheet)
+    files_mod.read_file_as_text("A" * 30)
+    assert sheet.files.return_value.export.call_args.kwargs["mimeType"] == "text/csv"  # not text/plain
+
+
+def test_read_file_as_text_extracts_pdf_text_and_page_count(monkeypatch):
+    svc = _files_svc("application/pdf", name="report.pdf", raw=_two_page_pdf())
+    monkeypatch.setattr(files_mod, "drive", lambda: svc)
+    out = files_mod.read_file_as_text("A" * 30)
+    assert out["pages"] == 2
+    assert "Hello" in out["content"] and "World" in out["content"]  # every page, not just the first
+    assert not svc.files.return_value.export.called  # a PDF is downloaded, not exported
+
+
+def test_read_file_as_text_curates_a_corrupt_pdf_instead_of_leaking_pypdf(monkeypatch):
+    # api_errors only curates HttpError, so a truncated PDF used to escape as a raw
+    # pypdf.errors.PdfStreamError — an exception type the agent cannot act on and which says
+    # nothing about the *file* being at fault rather than the request. Rust pins the same message.
+    svc = _files_svc("application/pdf", name="broken.pdf", raw=b"%PDF-1.4 truncated")
+    monkeypatch.setattr(files_mod, "drive", lambda: svc)
+    with pytest.raises(RuntimeError, match="^could not extract text from PDF: "):
+        files_mod.read_file_as_text("A" * 30)
+
+
+def test_read_file_as_text_pages_a_plain_text_file(monkeypatch):
+    svc = _files_svc("text/plain", name="long.txt", raw=b"aaaa\n\nbbbb\n\ncccc\xff")
+    monkeypatch.setattr(files_mod, "drive", lambda: svc)
+    out = files_mod.read_file_as_text("A" * 30, chunk=1, max_chars=5)
+    assert out["content"] == "bbbb" and out["chunk_index"] == 1
+    assert out["total_chunks"] == 3 and out["total_chars"] == 17 and out["has_more"] is True
+    whole = files_mod.read_file_as_text("A" * 30, max_chars=0)  # <=0 disables chunking
+    assert whole["total_chunks"] == 1 and whole["content"].endswith("cccc�")  # undecodable byte replaced
+    assert svc.files.return_value.get_media.call_args.kwargs["supportsAllDrives"] is True
+
+
+def test_read_file_as_text_refuses_a_binary_mime(monkeypatch):
+    svc = _files_svc("image/png", name="shot.png", raw=b"\x89PNG")
+    monkeypatch.setattr(files_mod, "drive", lambda: svc)
+    with pytest.raises(RuntimeError, match="not text-extractable"):
+        files_mod.read_file_as_text("A" * 30)
+
+
+def test_download_file_returns_a_small_file_inline(monkeypatch):
+    svc = _files_svc("image/png", name="shot.png", raw=b"\x89PNG")
+    monkeypatch.setattr(files_mod, "drive", lambda: svc)
+    assert files_mod.download_file("A" * 30) == {
+        "name": "shot.png", "mime_type": "image/png", "bytes": 4, "base64": "iVBORw==",
+    }
+    assert svc.files.return_value.get_media.call_args.kwargs["supportsAllDrives"] is True
+
+
+def test_download_file_spills_over_the_inline_limit(monkeypatch, tmp_path):
+    assert files_mod._INLINE_MAX == _FIVE_MIB  # the "<5MB → inline" the docstring promises
+    big = b"x" * (_FIVE_MIB + 1)
+    svc = _files_svc("application/zip", name="big.zip", raw=big)
+    monkeypatch.setattr(files_mod, "drive", lambda: svc)
+    monkeypatch.setenv("GDRIVE_MCP_FILES_DIR", str(tmp_path))
+    out = files_mod.download_file("A" * 30)
+    # base64 of 5MB+ would flood the agent's context, so it goes to the sandbox with a note instead
+    assert "base64" not in out and out["bytes"] == len(big)
+    assert out["note"] == f"{len(big)} bytes exceeded {_FIVE_MIB} inline limit; written to file"
+    assert out["path"].endswith("big.zip") and (tmp_path / "big.zip").read_bytes() == big
+
+
+def test_download_file_with_a_dest_path_spills_even_a_tiny_file(monkeypatch, tmp_path):
+    svc = _files_svc("application/zip", name="small.zip", raw=b"pk")
+    monkeypatch.setattr(files_mod, "drive", lambda: svc)
+    monkeypatch.setenv("GDRIVE_MCP_FILES_DIR", str(tmp_path))
+    out = files_mod.download_file("A" * 30, dest_path="sub/out.zip")
+    assert "base64" not in out and out["note"] is None  # an explicit destination needs no explaining
+    spilled = tmp_path / "sub" / "out.zip"
+    assert spilled.read_bytes() == b"pk"
+    assert spilled.stat().st_mode & 0o777 == 0o600  # spilled bytes may be sensitive: owner-only
+
+
+def test_download_file_refuses_a_google_native_file(monkeypatch):
+    svc = _files_svc("application/vnd.google-apps.document", name="Notes")
+    monkeypatch.setattr(files_mod, "drive", lambda: svc)
+    with pytest.raises(RuntimeError, match="use export_file or read_file_as_text"):
+        files_mod.download_file("A" * 30)
+    assert not svc.files.return_value.get_media.called  # get_media on a native file 403s
+
+
+def test_export_file_returns_a_small_export_inline(monkeypatch):
+    svc = _files_svc("application/vnd.google-apps.document", exported=b"%PDF")
+    monkeypatch.setattr(files_mod, "drive", lambda: svc)
+    assert files_mod.export_file("A" * 30, "PDF") == {"format": "PDF", "bytes": 4, "base64": "JVBERg=="}
+    kwargs = svc.files.return_value.export.call_args.kwargs
+    assert kwargs["mimeType"] == "application/pdf"  # the format is matched case-insensitively
+    assert "supportsAllDrives" not in kwargs  # Drive's export method has no such parameter
+
+
+def test_export_file_rejects_an_unsupported_format(monkeypatch):
+    svc = _files_svc("application/vnd.google-apps.document")
+    monkeypatch.setattr(files_mod, "drive", lambda: svc)
+    with pytest.raises(RuntimeError, match=r"unsupported export format 'epub'; choose from \['csv', 'docx'"):
+        files_mod.export_file("A" * 30, "epub")
+    assert not svc.files.return_value.export.called  # refused before any API call
+
+
+def test_export_file_spills_a_large_export_under_the_file_id(monkeypatch, tmp_path):
+    svc = _files_svc("application/vnd.google-apps.spreadsheet", exported=b"x" * (_FIVE_MIB + 1))
+    monkeypatch.setattr(files_mod, "drive", lambda: svc)
+    monkeypatch.setenv("GDRIVE_MCP_FILES_DIR", str(tmp_path))
+    out = files_mod.export_file("A" * 30, "CSV")
+    assert "base64" not in out and out["format"] == "CSV"
+    # the default name comes from the file id and the lowercased format, not the caller's spelling
+    assert out["path"].endswith(f"{'A' * 30}.csv")
+    assert (tmp_path / f"{'A' * 30}.csv").stat().st_size == _FIVE_MIB + 1
 
 
 if __name__ == "__main__":

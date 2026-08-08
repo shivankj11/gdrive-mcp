@@ -62,9 +62,17 @@ def read_file_as_text(item: str, chunk: int = 0, max_chars: int = DEFAULT_MAX_CH
         if mime == "application/pdf":
             from pypdf import PdfReader
 
-            reader = PdfReader(io.BytesIO(raw))
-            text = "\n".join((page.extract_text() or "") for page in reader.pages)
-            extra["pages"] = len(reader.pages)
+            # api_errors only curates HttpError, so without this a truncated or encrypted PDF
+            # surfaces to the agent as a raw pypdf type (PdfStreamError, PdfReadError,
+            # DependencyError, a bare KeyError on a malformed xref) with no hint that the *file*
+            # is the problem rather than the request. Broad on purpose: the set of ways pypdf
+            # fails is not part of this tool's contract.
+            try:
+                reader = PdfReader(io.BytesIO(raw))
+                text = "\n".join((page.extract_text() or "") for page in reader.pages)
+                extra["pages"] = len(reader.pages)
+            except Exception as exc:
+                raise RuntimeError(f"could not extract text from PDF: {exc}") from exc
         elif mime.startswith("text/") or mime in ("application/json", "application/csv"):
             text = raw.decode("utf-8", "replace")
         else:
