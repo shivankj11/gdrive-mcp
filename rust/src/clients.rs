@@ -1,7 +1,7 @@
 //! The Google API surface this server needs, behind one trait.
 //!
 //! [`GoogleApi`] is the seam the tool modules are written against: [`GoogleClient`] talks to the
-//! real Drive/Docs/Sheets REST endpoints with the user's OAuth credentials, and the tool tests
+//! real Drive/Docs/Sheets/Calendar REST endpoints with the user's OAuth credentials, and the tool tests
 //! substitute a fake. Credentials are loaded (and refreshed when stale) on first use; if no
 //! cached token exists that surfaces as the same "run `gdrive-mcp auth`" message the Python
 //! implementation raised.
@@ -19,6 +19,7 @@ const DRIVE: &str = "https://www.googleapis.com/drive/v3";
 const DRIVE_UPLOAD: &str = "https://www.googleapis.com/upload/drive/v3";
 const DOCS: &str = "https://docs.googleapis.com/v1";
 const SHEETS: &str = "https://sheets.googleapis.com/v4";
+const CALENDAR: &str = "https://www.googleapis.com/calendar/v3";
 
 /// Everything not unreserved per RFC 3986 — Sheets A1 ranges go in the path and contain
 /// `!`, `'`, `:` and spaces, all of which must survive as data rather than as path syntax.
@@ -52,6 +53,17 @@ const PATH_SEGMENT: &AsciiSet = &CONTROLS
 
 fn seg(s: &str) -> String {
     utf8_percent_encode(s, PATH_SEGMENT).to_string()
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct CalendarEventsListParams<'a> {
+    pub calendar_id: &'a str,
+    pub time_min: &'a str,
+    pub time_max: &'a str,
+    pub query: Option<&'a str>,
+    pub max_results: i64,
+    pub page_token: Option<&'a str>,
+    pub show_deleted: bool,
 }
 
 /// The Google API operations the tools use. One method per distinct REST call.
@@ -129,6 +141,62 @@ pub trait GoogleApi: Send + Sync {
     ) -> Result<Value>;
     async fn sheets_values_clear(&self, spreadsheet_id: &str, range: &str) -> Result<Value>;
     async fn sheets_batch_update(&self, spreadsheet_id: &str, body: &Value) -> Result<Value>;
+
+    // ---- Calendar ------------------------------------------------------------------------
+    async fn calendar_list(
+        &self,
+        max_results: i64,
+        page_token: Option<&str>,
+        min_access_role: Option<&str>,
+        show_hidden: bool,
+    ) -> Result<Value> {
+        let _ = (max_results, page_token, min_access_role, show_hidden);
+        Err(ToolError::msg("Calendar API is not available in this client"))
+    }
+    async fn calendar_events_list(&self, params: CalendarEventsListParams<'_>) -> Result<Value> {
+        let _ = params;
+        Err(ToolError::msg("Calendar API is not available in this client"))
+    }
+    async fn calendar_events_get(&self, calendar_id: &str, event_id: &str) -> Result<Value> {
+        let _ = (calendar_id, event_id);
+        Err(ToolError::msg("Calendar API is not available in this client"))
+    }
+    async fn calendar_freebusy(&self, body: &Value) -> Result<Value> {
+        let _ = body;
+        Err(ToolError::msg("Calendar API is not available in this client"))
+    }
+    async fn calendar_events_insert(
+        &self,
+        calendar_id: &str,
+        body: &Value,
+        send_updates: &str,
+        conference_data_version: i64,
+    ) -> Result<Value> {
+        let _ = (calendar_id, body, send_updates, conference_data_version);
+        Err(ToolError::msg("Calendar API is not available in this client"))
+    }
+    async fn calendar_events_patch(
+        &self,
+        calendar_id: &str,
+        event_id: &str,
+        body: &Value,
+        send_updates: &str,
+        conference_data_version: i64,
+        etag: Option<&str>,
+    ) -> Result<Value> {
+        let _ = (calendar_id, event_id, body, send_updates, conference_data_version, etag);
+        Err(ToolError::msg("Calendar API is not available in this client"))
+    }
+    async fn calendar_events_delete(
+        &self,
+        calendar_id: &str,
+        event_id: &str,
+        send_updates: &str,
+        etag: Option<&str>,
+    ) -> Result<Value> {
+        let _ = (calendar_id, event_id, send_updates, etag);
+        Err(ToolError::msg("Calendar API is not available in this client"))
+    }
 
     // ---- misc ----------------------------------------------------------------------------
     /// Authorized fetch of a Docs image `contentUri`; `Ok(None)` means "skip this one"
@@ -250,6 +318,7 @@ impl GoogleClient {
         url: &str,
         query: &[(&str, String)],
         body: Option<&Value>,
+        if_match: Option<&str>,
     ) -> Result<reqwest::Response> {
         self.authorized(|token| {
             let mut req = self.http.request(method.clone(), url).bearer_auth(token);
@@ -258,6 +327,9 @@ impl GoogleClient {
             }
             if let Some(b) = body {
                 req = req.json(b);
+            }
+            if let Some(etag) = if_match {
+                req = req.header(reqwest::header::IF_MATCH, etag);
             }
             req
         })
@@ -271,7 +343,23 @@ impl GoogleClient {
         query: &[(&str, String)],
         body: Option<&Value>,
     ) -> Result<Value> {
-        let resp = self.send(method, url, query, body).await?;
+        let resp = self.send(method, url, query, body, None).await?;
+        let text = resp.text().await.map_err(transport_error)?;
+        if text.trim().is_empty() {
+            return Ok(Value::Null);
+        }
+        serde_json::from_str(&text).map_err(|e| ToolError::msg(format!("unparseable API response: {e}")))
+    }
+
+    async fn json_if_match(
+        &self,
+        method: Method,
+        url: &str,
+        query: &[(&str, String)],
+        body: Option<&Value>,
+        etag: Option<&str>,
+    ) -> Result<Value> {
+        let resp = self.send(method, url, query, body, etag).await?;
         let text = resp.text().await.map_err(transport_error)?;
         if text.trim().is_empty() {
             return Ok(Value::Null);
@@ -280,7 +368,7 @@ impl GoogleClient {
     }
 
     async fn bytes(&self, url: &str, query: &[(&str, String)]) -> Result<Vec<u8>> {
-        let resp = self.send(Method::GET, url, query, None).await?;
+        let resp = self.send(Method::GET, url, query, None, None).await?;
         Ok(resp.bytes().await.map_err(transport_error)?.to_vec())
     }
 
@@ -444,6 +532,55 @@ fn drive_about_query(fields: &str) -> Vec<(&'static str, String)> {
 /// `OVERWRITE`, would write over whatever already sits below the last row of the tab.
 fn sheets_values_append_query(value_input: &str) -> Vec<(&'static str, String)> {
     q(vec![("valueInputOption", value_input.to_string()), ("insertDataOption", "INSERT_ROWS".into())])
+}
+
+fn calendar_list_query(
+    max_results: i64,
+    page_token: Option<&str>,
+    min_access_role: Option<&str>,
+    show_hidden: bool,
+) -> Vec<(&'static str, String)> {
+    let mut params =
+        q(vec![("maxResults", max_results.to_string()), ("showHidden", show_hidden.to_string())]);
+    if let Some(value) = page_token {
+        params.push(("pageToken", value.to_string()));
+    }
+    if let Some(value) = min_access_role {
+        params.push(("minAccessRole", value.to_string()));
+    }
+    params
+}
+
+fn calendar_events_list_query(params: CalendarEventsListParams<'_>) -> Vec<(&'static str, String)> {
+    let mut query = q(vec![
+        ("timeMin", params.time_min.to_string()),
+        ("timeMax", params.time_max.to_string()),
+        ("maxResults", params.max_results.to_string()),
+        ("showDeleted", params.show_deleted.to_string()),
+        ("singleEvents", "true".into()),
+        ("orderBy", "startTime".into()),
+    ]);
+    if let Some(value) = params.query {
+        query.push(("q", value.to_string()));
+    }
+    if let Some(value) = params.page_token {
+        query.push(("pageToken", value.to_string()));
+    }
+    query
+}
+
+fn calendar_event_write_query(
+    send_updates: &str,
+    conference_data_version: i64,
+) -> Vec<(&'static str, String)> {
+    q(vec![
+        ("sendUpdates", send_updates.to_string()),
+        ("conferenceDataVersion", conference_data_version.to_string()),
+    ])
+}
+
+fn calendar_event_delete_query(send_updates: &str) -> Vec<(&'static str, String)> {
+    q(vec![("sendUpdates", send_updates.to_string())])
 }
 
 #[async_trait]
@@ -655,6 +792,99 @@ impl GoogleApi for GoogleClient {
         .await
     }
 
+    async fn calendar_list(
+        &self,
+        max_results: i64,
+        page_token: Option<&str>,
+        min_access_role: Option<&str>,
+        show_hidden: bool,
+    ) -> Result<Value> {
+        self.json(
+            Method::GET,
+            &format!("{CALENDAR}/users/me/calendarList"),
+            &calendar_list_query(max_results, page_token, min_access_role, show_hidden),
+            None,
+        )
+        .await
+    }
+
+    async fn calendar_events_list(&self, params: CalendarEventsListParams<'_>) -> Result<Value> {
+        let query = calendar_events_list_query(params);
+        self.json(
+            Method::GET,
+            &format!("{CALENDAR}/calendars/{}/events", seg(params.calendar_id)),
+            &query,
+            None,
+        )
+        .await
+    }
+
+    async fn calendar_events_get(&self, calendar_id: &str, event_id: &str) -> Result<Value> {
+        self.json(
+            Method::GET,
+            &format!("{CALENDAR}/calendars/{}/events/{}", seg(calendar_id), seg(event_id)),
+            &[],
+            None,
+        )
+        .await
+    }
+
+    async fn calendar_freebusy(&self, body: &Value) -> Result<Value> {
+        self.json(Method::POST, &format!("{CALENDAR}/freeBusy"), &[], Some(body)).await
+    }
+
+    async fn calendar_events_insert(
+        &self,
+        calendar_id: &str,
+        body: &Value,
+        send_updates: &str,
+        conference_data_version: i64,
+    ) -> Result<Value> {
+        self.json(
+            Method::POST,
+            &format!("{CALENDAR}/calendars/{}/events", seg(calendar_id)),
+            &calendar_event_write_query(send_updates, conference_data_version),
+            Some(body),
+        )
+        .await
+    }
+
+    async fn calendar_events_patch(
+        &self,
+        calendar_id: &str,
+        event_id: &str,
+        body: &Value,
+        send_updates: &str,
+        conference_data_version: i64,
+        etag: Option<&str>,
+    ) -> Result<Value> {
+        self.json_if_match(
+            Method::PATCH,
+            &format!("{CALENDAR}/calendars/{}/events/{}", seg(calendar_id), seg(event_id)),
+            &calendar_event_write_query(send_updates, conference_data_version),
+            Some(body),
+            etag,
+        )
+        .await
+    }
+
+    async fn calendar_events_delete(
+        &self,
+        calendar_id: &str,
+        event_id: &str,
+        send_updates: &str,
+        etag: Option<&str>,
+    ) -> Result<Value> {
+        self.json_if_match(
+            Method::DELETE,
+            &format!("{CALENDAR}/calendars/{}/events/{}", seg(calendar_id), seg(event_id)),
+            &calendar_event_delete_query(send_updates),
+            None,
+            etag,
+        )
+        .await
+    }
+
     async fn fetch_image(&self, uri: &str) -> Result<Option<(Vec<u8>, String)>> {
         let token = self.token().await?;
         let resp = self
@@ -723,6 +953,43 @@ mod tests {
             "an append without INSERT_ROWS overwrites whatever sits below the data: {query:?}"
         );
         assert!(query.contains(&("valueInputOption", "RAW".to_string())), "{query:?}");
+    }
+
+    #[test]
+    fn calendar_queries_pin_expansion_order_paging_notifications_and_conference_version() {
+        let calendars = calendar_list_query(250, Some("next"), Some("writer"), true);
+        assert!(calendars.contains(&("maxResults", "250".into())));
+        assert!(calendars.contains(&("pageToken", "next".into())));
+        assert!(calendars.contains(&("minAccessRole", "writer".into())));
+        assert!(calendars.contains(&("showHidden", "true".into())));
+
+        let events = calendar_events_list_query(CalendarEventsListParams {
+            calendar_id: "primary",
+            time_min: "2026-09-01T00:00:00Z",
+            time_max: "2026-10-01T00:00:00Z",
+            query: Some("planning"),
+            max_results: 25,
+            page_token: Some("page"),
+            show_deleted: true,
+        });
+        for expected in [
+            ("singleEvents", "true"),
+            ("orderBy", "startTime"),
+            ("showDeleted", "true"),
+            ("q", "planning"),
+            ("pageToken", "page"),
+        ] {
+            assert!(
+                events.contains(&(expected.0, expected.1.to_string())),
+                "missing {expected:?}: {events:?}"
+            );
+        }
+
+        assert_eq!(
+            calendar_event_write_query("none", 1),
+            vec![("sendUpdates", "none".into()), ("conferenceDataVersion", "1".into())]
+        );
+        assert_eq!(calendar_event_delete_query("externalOnly"), vec![("sendUpdates", "externalOnly".into())]);
     }
 
     /// Whether an endpoint's REST method takes `supportsAllDrives` at all.

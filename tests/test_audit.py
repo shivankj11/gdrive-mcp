@@ -63,6 +63,35 @@ def test_locator_args_are_never_logged(audit_log):
         assert secret not in blob
 
 
+def test_calendar_content_attendees_and_email_calendar_ids_are_never_logged(audit_log):
+    audit.record(
+        "create_event",
+        {
+            "calendar_id": "private-calendar@example.com",
+            "event_id": "opaqueevent123",
+            "summary": "Confidential Title",
+            "description": "private-note-A",
+            "location": "Restricted Room",
+            "attendees": ["collaborator@example.com"],
+            "query": "confidential search",
+        },
+        "ok",
+    )
+    entry = json.loads(audit_log.read_text().strip())
+    assert entry["args"] == {}
+    blob = audit_log.read_text()
+    for sensitive in (
+        "private-calendar@example.com",
+        "opaqueevent123",
+        "Confidential Title",
+        "private-note-A",
+        "Restricted Room",
+        "collaborator@example.com",
+        "confidential search",
+    ):
+        assert sensitive not in blob
+
+
 def test_unparseable_ref_is_masked(audit_log):
     audit.record("read_document", {"item": "free text not a ref"}, "ok")
     assert json.loads(audit_log.read_text().strip())["args"]["item"] == "<unparseable>"

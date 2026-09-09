@@ -29,6 +29,10 @@ const READ_ONLY: &[&str] = &[
     "extract_images",
     "read_comments",
     "read_file_as_text",
+    "list_calendars",
+    "list_events",
+    "get_event",
+    "query_freebusy",
 ];
 // Note: read_full_sheet is NOT read-only — it spills a local CSV (a local side effect).
 /// Tools that can overwrite/remove existing data.
@@ -41,6 +45,10 @@ const DESTRUCTIVE: &[&str] = &[
     "upload_file",
     "delete_text",
     "replace_text",
+    "create_event",
+    "update_event",
+    "delete_event",
+    "respond_to_event",
 ];
 // Everything else is additive (append/create/add, or a read that spills a new local file).
 
@@ -236,6 +244,10 @@ mod tests {
         "extract_images",
         "read_comments",
         "read_file_as_text",
+        "list_calendars",
+        "list_events",
+        "get_event",
+        "query_freebusy",
     ];
     const PYTHON_DESTRUCTIVE: &[&str] = &[
         "write_sheet",
@@ -246,6 +258,10 @@ mod tests {
         "upload_file",
         "delete_text",
         "replace_text",
+        "create_event",
+        "update_event",
+        "delete_event",
+        "respond_to_event",
     ];
 
     fn set(names: &[&str]) -> std::collections::BTreeSet<String> {

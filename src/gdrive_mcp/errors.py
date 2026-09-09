@@ -7,8 +7,9 @@ import functools
 from googleapiclient.errors import HttpError
 
 _HINTS = {
-    403: " (is the API enabled for this project and the drive scope granted?)",
+    403: " (is the required Google API enabled and its OAuth scope granted?)",
     404: " (check the ID/URL and that your account has access)",
+    412: " (the resource changed after preview; read it again before retrying)",
     429: " (rate limited — retry shortly)",
 }
 

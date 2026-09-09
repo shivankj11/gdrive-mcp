@@ -1,4 +1,4 @@
-//! Google Drive / Docs / Sheets MCP (read/write) for agents — browser-OAuth, local stdio.
+//! Google Drive / Docs / Sheets / Calendar MCP (read/write) for agents — browser-OAuth, local stdio.
 //!
 //! A Rust re-implementation of the Python `gdrive_mcp` package, module-for-module:
 //!
@@ -16,7 +16,7 @@
 //! | [`audit`]   | append-only, content-free audit log                                    |
 //! | [`guard`]   | confirm-before-destructive previews                                |
 //! | [`gating`]  | the per-action manual-verification gate                            |
-//! | [`tools`]   | the MCP tools themselves                                           |
+//! | [`tools`]   | the Drive, Docs, Sheets, and Calendar MCP tools                    |
 //! | [`server`]  | tool registry + stdio MCP wiring                                   |
 
 // The module docs port the Python docstrings verbatim, including their aligned continuation

@@ -129,6 +129,20 @@ mod tests {
     }
 
     #[test]
+    fn calendar_content_attendees_and_email_calendar_ids_are_never_recorded() {
+        let out = safe_args(&args(json!({
+            "calendar_id": "private-calendar@example.com",
+            "event_id": "opaqueevent123",
+            "summary": "Confidential Title",
+            "description": "private-note-A",
+            "location": "Restricted Room",
+            "attendees": ["collaborator@example.com"],
+            "query": "confidential search"
+        })));
+        assert!(out.is_empty(), "Calendar arguments leaked into the audit allowlist: {out:?}");
+    }
+
+    #[test]
     fn ref_arguments_are_reduced_to_their_opaque_id() {
         let out = safe_args(&args(json!({
             "item": "https://docs.google.com/document/d/DOC123456789012345678/edit#heading=h.private",

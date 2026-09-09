@@ -139,6 +139,20 @@ pub async fn load_credentials() -> Result<Credentials> {
         return err(format!("No cached credentials at {}. Run `gdrive-mcp auth` first.", path.display()));
     }
     let creds = read_token(&path)?;
+    let missing: Vec<&str> = SCOPES
+        .iter()
+        .copied()
+        .filter(|required| !creds.scopes.iter().any(|granted| granted == required))
+        .collect();
+    if !missing.is_empty() {
+        let names: Vec<&str> =
+            missing.iter().map(|scope| scope.rsplit('/').next().unwrap_or(scope)).collect();
+        return err(format!(
+            "Cached credentials at {} do not grant the required scopes ({}). Run `gdrive-mcp auth` again to approve the added access.",
+            path.display(),
+            names.join(", ")
+        ));
+    }
     if creds.valid() {
         return Ok(creds);
     }
@@ -261,6 +275,7 @@ pub async fn run_auth_flow() -> Result<Credentials> {
         // access_type=offline + prompt=consent force Google to return a refresh token, so the
         // server never needs the browser again.
         .append_pair("access_type", "offline")
+        .append_pair("include_granted_scopes", "true")
         .append_pair("prompt", "consent");
 
     eprintln!("Please visit this URL to authorize this application:\n{auth_url}\n");
@@ -386,6 +401,7 @@ fn open_browser(url: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ENV_LOCK;
 
     fn creds_with_expiry(expiry: Option<&str>) -> Credentials {
         Credentials {
@@ -452,5 +468,29 @@ mod tests {
         .unwrap();
         assert!(c.valid());
         assert_eq!(c.universe_domain, "googleapis.com");
+    }
+
+    #[tokio::test]
+    async fn an_old_drive_only_token_requests_reconsent_for_calendar() {
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("token.json");
+        std::fs::write(
+            &path,
+            r#"{"token":"at","refresh_token":"rt","token_uri":"https://oauth2.googleapis.com/token",
+                "client_id":"cid","client_secret":"cs","scopes":["https://www.googleapis.com/auth/drive"],
+                "expiry":"2030-01-02T03:04:05.123456Z"}"#,
+        )
+        .unwrap();
+        let old = std::env::var_os("GDRIVE_MCP_TOKEN");
+        unsafe { std::env::set_var("GDRIVE_MCP_TOKEN", &path) };
+        let result = load_credentials().await;
+        match old {
+            Some(value) => unsafe { std::env::set_var("GDRIVE_MCP_TOKEN", value) },
+            None => unsafe { std::env::remove_var("GDRIVE_MCP_TOKEN") },
+        }
+        let message = result.unwrap_err().to_string();
+        assert!(message.contains("Run `gdrive-mcp auth` again"), "{message}");
+        assert!(message.contains("calendar.events"), "{message}");
     }
 }

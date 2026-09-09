@@ -61,7 +61,8 @@ fi
 
 # ---- 3. one-time browser consent -------------------------------------------
 # whoami doubles as a credential probe: it silently refreshes a stale token and
-# only fails when there's genuinely no usable token, so we auth exactly when needed.
+# fails when the token is missing required scopes (for example, one created before Calendar
+# support), so we auth exactly when needed and upgrade old grants through incremental consent.
 if uvx --from "$REPO" gdrive-mcp whoami >/dev/null 2>&1; then
   info "Already authenticated — skipping browser consent."
 else

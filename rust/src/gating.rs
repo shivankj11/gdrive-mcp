@@ -25,7 +25,7 @@ const TRUTHY: &[&str] = &["always", "1", "true", "yes", "on"];
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 struct Approval {
-    /// Approve this verification-gated Google Drive action?
+    /// Approve this verification-gated Google Workspace action?
     #[serde(deserialize_with = "lenient_bool")]
     approved: bool,
 }

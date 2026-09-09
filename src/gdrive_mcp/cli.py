@@ -23,7 +23,7 @@ def _cmd_auth(_args: argparse.Namespace) -> int:
     user = _authed_user(creds)
     print(
         f"Authenticated as {user.get('emailAddress', 'unknown')}.\n"
-        f"Token cached at {token_path()} (read/write Drive access)."
+        f"Token cached at {token_path()} (read/write Drive and Calendar event access)."
     )
     return 0
 
@@ -45,7 +45,7 @@ def _cmd_serve(_args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="gdrive-mcp",
-        description="Google Drive / Docs / Sheets MCP (read/write) — auth + serve.",
+        description="Google Drive / Docs / Sheets / Calendar MCP (read/write) — auth + serve.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("auth", help="Run the one-time browser OAuth consent and cache the token.")

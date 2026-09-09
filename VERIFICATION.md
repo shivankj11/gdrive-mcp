@@ -21,7 +21,7 @@ There are two implementations of the same MCP server, and they are meant to be i
 | | Source | Tests | Status |
 |---|---|---|---|
 | **Python** | `src/gdrive_mcp/**` | `tests/**` | the behaviour of record |
-| **Rust** | `rust/src/**` | `rust/src/**` (`mod tests`) + `rust/tests/**` | a port: same 29 tools, same argument names, same result shapes, same confirm / dry-run / locator / gate semantics |
+| **Rust** | `rust/src/**` | `rust/src/**` (`mod tests`) + `rust/tests/**` | a port: same 37 tools, same argument names, same result shapes, same confirm / dry-run / locator / gate semantics |
 
 They read the same OAuth client and write the same token file, so authenticating one authenticates
 the other. That is convenient and it is also a hazard: it means a Rust defect is reachable by
@@ -63,10 +63,10 @@ A plan that pretends it drove the implementation is worth less than one that adm
 
 | | Measured |
 |---|---|
-| Rust | `cargo test` on a Unix host: **393 passed, 2 ignored** (383 unit + 8 integration + 2 credential-free live-harness companions; the 2 ignored are the live harnesses). A few sandbox checks are `#[cfg(unix)]`, so a Windows run counts fewer. `cargo clippy --all-targets` and `cargo fmt --check` clean. |
-| Python | `uv run pytest -q`: **188 passed, 10 skipped** (the skipped 10 are the live locator harness, latched off). |
-| Cross-implementation | `scripts/diff_tool_surface.py`: green at **29/29** tools. |
-| Live credentialed | Docs `L1`–`L10`: Python 2026-08-06 (10 passed); Rust 2026-08-07 (10 passed, 11.6 s). Sheets `S1`–`S11`: Rust 2026-08-07 (11 passed, 15.3 s); **Python has never had a Sheets live run.** |
+| Rust | `cargo test` on a Unix host: **420 passed, 3 ignored** (409 library tests + 8 server integration tests + 3 credential-free live-harness companions; the 3 ignored are the live harnesses). A few sandbox checks are `#[cfg(unix)]`, so a Windows run counts fewer. `cargo clippy --all-targets` and `cargo fmt --check` clean. |
+| Python | `uv run pytest -q`: **249 passed, 11 skipped** (the skipped tests are the live locator and Calendar harnesses, latched off). |
+| Cross-implementation | `scripts/diff_tool_surface.py`: green at **37/37** tools. |
+| Live credentialed | Docs `L1`–`L10`: Python 2026-08-06 (10 passed); Rust 2026-08-07 (10 passed, 11.6 s). Sheets `S1`–`S11`: Rust 2026-08-07 (11 passed, 15.3 s); **Python has never had a Sheets live run.** Calendar `C1`–`C12`: Python 2026-09-08 (2 tests passed, 9.48 s); Rust 2026-09-08 (1 live test passed, 7.08 s). |
 
 ---
 
@@ -78,9 +78,11 @@ listed with the sections that discharge them.
 
 | Guarantee | What it means | Verified in |
 |---|---|---|
-| **One `item` argument** | Every tool takes its target as `item`, a URL or a bare id, parsed by one resolver. A parse bug mis-targets every tool at once. | `DSC-1`–`DSC-6` |
+| **Consistent target arguments** | Drive/Docs/Sheets tools take their target as `item`, a URL or bare id parsed by one resolver. Calendar uses explicit `calendar_id` and `event_id`, matching Google's two-part resource identity. | `DSC-1`–`DSC-6`, `CAL-2`–`CAL-6` |
 | **The confirm gate** | The tools that can destroy data return `status: "confirmation_required"` plus an impact summary instead of writing, unless called with `confirm=true`. Additive tools are deliberately *not* gated. | `LOC-17`–`LOC-19`, `SHT-14`/`20`/`21`/`23`, `FIL-1`–`FIL-6`, `SRF-2`–`SRF-5` |
-| **Dry-run predicts without writing** | Ten edit tools accept `dry_run=true` and return a predicted before/after with no API mutation. Dry-run is the *explore* affordance; confirm is the *gate*. Both exist, and a dry run must not present itself as a confirmation prompt. | `DW-1`, `LOC-20`, `TBL-7`/`18`, `SHT-38`–`41`/`45`, `SRF-5` |
+| **Dry-run predicts without writing** | Fourteen edit tools accept `dry_run=true` and return a predicted before/after with no API mutation. Dry-run is the *explore* affordance; confirm is the *gate*. Both exist, and a dry run must not present itself as a confirmation prompt. | `DW-1`, `LOC-20`, `TBL-7`/`18`, `SHT-38`–`41`/`45`, `CAL-8`/`12`/`15`/`17`, `SRF-5` |
+| **Calendar writes do not surprise attendees** | Every Calendar mutation defaults to `send_updates=none`; notification-bearing values are explicit and validated. Caller-supplied event ids make creates safely retryable. | `CAL-8`–`CAL-18` |
+| **Calendar writes reject stale previews** | Update, delete and RSVP read an ETag and send it as `If-Match`; HTTP 412 becomes a directed re-read-and-retry error. | `CAL-13`, `CAL-16`, `CAL-18`, live `C7` |
 | **Locator, not offset, addressing** | Docs edits locate their target by content (`match`, `section`, `after`, `before`), resolved against the API's own element offsets. Character offsets into `read_document`'s output are *not* valid Docs indexes — that output is rendered markdown, and Docs indexes are UTF-16 code units. | `LOC-1`–`LOC-16`, `LOC-30`–`LOC-36` |
 | **Revision pinning on Docs writes** | Locator writes send `writeControl: {requiredRevisionId}`, so a concurrent edit makes the write **fail** rather than land on shifted text. | `LOC-23`, live `L2` |
 | **RAW by default** | `write_sheet` / `append_rows` default to `value_input="RAW"`, so a leading `=` in agent-supplied text is stored as literal text, not as a live formula. This is a formula-injection guard: the values an agent writes may have come from a document it just read. | `SHT-16`, `SHT-18`, `SHT-19`, live `S1`/`S2` |
@@ -126,11 +128,11 @@ the gate's elicitation round trip — everything between the client and the tool
 `rust/tests/server_integration.rs` against `rmcp`. Python:
 `tests/test_server_integration.py` against FastMCP.
 
-**Layer 4 — live credentialed.** Real API, real document, real credentials. This is the only layer
-that can falsify a claim about Google's own behaviour. Both harnesses are double-latched — the
-Rust ones `#[ignore]` plus a `GDRIVE_MCP_LIVE` environment check, the Python one a
-`skipif` — so an ordinary test run can never reach Google. Each creates **one** scratch file, uses
-**synthetic** content throughout, and trashes the file on teardown. §5 has the check tables.
+**Layer 4 — live credentialed.** Real API, real Workspace resource, real credentials. This is the
+only layer that can falsify a claim about Google's own behaviour. Every harness is double-latched —
+the Rust ones use `#[ignore]` plus a `GDRIVE_MCP_LIVE` environment check, and the Python ones use a
+`skipif` — so an ordinary test run can never reach Google. Each uses one disposable scratch
+resource with synthetic content and cleans it up on teardown. §5 has the check tables.
 
 ---
 
@@ -477,8 +479,8 @@ one place where writing the *wrong* thing is a compliance event rather than a bu
 
 | # | Claim | Rust (`audit::tests::`) | Python (`test_audit.py::`) |
 |---|---|---|---|
-| AUD-1 | One JSON line per call, recording user, tool, target id and outcome — success and error alike | `writes_one_json_line_per_call` | `test_records_only_safe_keys_and_no_phi`, `test_error_outcome_and_scalars` |
-| AUD-2 | Cell contents, filenames and free text are **never** recorded. The safe-key list is an allowlist, so this holds by construction — and the check exists because widening the allowlist would quietly start writing document text to disk | `free_text_and_content_arguments_are_never_recorded` | `test_records_only_safe_keys_and_no_phi` |
+| AUD-1 | One JSON line per call, recording user, tool, target id and outcome — success and error alike | `writes_one_json_line_per_call` | `test_records_only_safe_keys_and_no_content`, `test_error_outcome_and_scalars` |
+| AUD-2 | Cell contents, filenames and free text are **never** recorded. The safe-key list is an allowlist, so this holds by construction — and the check exists because widening the allowlist would quietly start writing document text to disk | `free_text_and_content_arguments_are_never_recorded` | `test_records_only_safe_keys_and_no_content` |
 | AUD-3 | Locator arguments (`match`, `section`, `replacement`, `after`, `before`) are never recorded — they are document content by definition | `locator_arguments_are_never_recorded` | `test_locator_args_are_never_logged` |
 | AUD-4 | Reference arguments are reduced to their opaque Drive id, and an unparseable one is masked rather than logged verbatim (a raw URL or free-text `item` could itself carry sensitive data) | `ref_arguments_are_reduced_to_their_opaque_id`, `an_unparseable_ref_is_masked_rather_than_logged_verbatim` | `test_unparseable_ref_is_masked` |
 | AUD-5 | The record carries the defaults the tool actually ran with, and an unset optional reference is left **out** rather than logged as `<unparseable>` | `server::tests::the_audit_record_carries_the_defaults_the_tool_actually_ran_with`, `an_unset_optional_reference_is_left_out_rather_than_logged_as_unparseable` | — |
@@ -529,7 +531,7 @@ What the MCP client is actually told, and what happens to the arguments it sends
 
 | # | Claim | Rust | Python |
 |---|---|---|---|
-| SRF-1 | All **29** tools register, with unique names and non-empty descriptions | `server_integration.rs::every_tool_is_registered_with_the_right_annotations` (asserts `tools.len() == 29`), `tools::tests::every_tool_forbids_unknown_arguments_and_names_itself` | `test_server_integration.py::test_registered_tools_and_annotations` (`len(by_name) == 29`) |
+| SRF-1 | All **37** tools register, with unique names and non-empty descriptions | `server_integration.rs::every_tool_is_registered_with_the_right_annotations` (asserts `tools.len() == 37`), `tools::tests::every_tool_forbids_unknown_arguments_and_names_itself` | `test_server_integration.py::test_registered_tools_and_annotations` (`len(by_name) == 37`) |
 | SRF-2 | The read-only and destructive sets are the Python sets **verbatim**, are disjoint, and every name in them is actually registered — set membership *is* the contract, since it is what every client is told | `server::tests::the_annotated_sets_are_the_python_sets_verbatim` | `test_registered_tools_and_annotations` (representatives only) |
 | SRF-3 | Read-only tools carry `readOnlyHint` and leave `destructiveHint` **unset** — a read cannot destroy anything, so claiming `false` would be a claim the Python never made; destructive tools carry the inverse triple | `server::tests::every_read_only_tool_is_annotated_as_such`, `every_destructive_tool_carries_the_destructive_hint` | representatives only |
 | SRF-4 | Additive tools are writes but not destructive — and `read_full_sheet` is in that set, **not** in read-only, because it spills a local file | `server::tests::additive_tools_are_writes_but_not_destructive` | — |
@@ -538,14 +540,44 @@ What the MCP client is actually told, and what happens to the arguments it sends
 | SRF-7 | Every schema forbids unknown arguments (`additionalProperties: false`), leaks no injected `ctx`, declares only `required` args that exist as properties, and declares optional arguments the same way everywhere | `server::tests::every_registered_tool_becomes_an_rmcp_tool_with_a_strict_schema`, `tools::tests::declared_required_arguments_all_exist_as_properties`, `optional_arguments_are_declared_the_same_way_everywhere` | `test_registered_tools_and_annotations` asserts `"ctx" not in inputSchema` |
 | SRF-8 | An unknown argument is **rejected**, not dropped, on the registered path | `server_integration.rs::an_unknown_argument_is_rejected_rather_than_dropped`, `args::tests::unknown_arguments_are_rejected_rather_than_dropped` | `test_unknown_kwarg_rejected_on_registered_path`, `test_unknown_kwarg_rejected_on_new_tools` |
 | SRF-9 | Argument coercion reproduces **both** of FastMCP's layers, not just the strict one: a list sent as a JSON string is re-parsed, a boolean sent as `"true"` is coerced, an integral float counts as an integer, an explicit `null` reads as the documented default — while a word that is not a boolean is still rejected, a string that merely looks numeric is left alone, wrong types are reported with the argument name, missing required arguments say so, and `rows` must be a list of lists | `args::tests::a_list_argument_sent_as_a_json_string_is_re_parsed`, `booleans_and_integers_accept_the_spellings_pydantic_coerced`, `integral_floats_count_as_integers`, `explicit_null_reads_as_the_documented_default`, `a_word_that_is_not_a_boolean_is_still_rejected`, `a_string_that_merely_looks_numeric_is_left_alone`, `wrong_types_are_reported_with_the_argument_name`, `missing_required_arguments_say_so`, `rows_must_be_a_list_of_lists` | n/a — pydantic's own behaviour, which the Rust tests encode |
-| SRF-10 | Tools are declared in the order the Python modules registered them, and each module's dispatch ignores names it does not own | `tools::discovery::tests::the_tools_are_declared_in_the_python_modules_order`, `tools::docs::tests::the_tools_are_declared_in_the_python_modules_order`, `tools::sheets::tests::the_tools_are_declared_in_the_order_the_python_module_registered_them`, `tools::files::tests::the_tools_are_declared_in_the_python_module_order`; `tools::discovery::tests::dispatch_ignores_tools_belonging_to_other_modules`, `tools::docs::tests::a_name_this_module_does_not_own_is_left_to_the_next_module`, `tools::sheets::tests::a_tool_this_module_does_not_own_is_left_for_the_next_one`, `tools::files::tests::an_unrelated_tool_name_is_left_for_another_module` | n/a |
-| SRF-11 | **Cross-language surface parity**: identical names, descriptions, argument names, argument **order**, required sets and defaults, and a schema that forbids unknown arguments | `scripts/diff_tool_surface.py` — reads the Python signatures and docstrings out of the AST (no import, no credentials), starts the Rust binary, asks it for `tools/list` over stdio, and diffs. Exits non-zero on any mismatch. **Green at 29/29.** | same script |
+| SRF-10 | Tools are declared in the order the Python modules registered them, and each module's dispatch ignores names it does not own | `tools::{discovery,docs,sheets,files,calendar}::tests::*declared*order*` and each module's unrelated-name dispatch test | n/a |
+| SRF-11 | **Cross-language surface parity**: identical names, descriptions, argument names, argument **order**, required sets and defaults, and a schema that forbids unknown arguments | `scripts/diff_tool_surface.py` — reads the Python signatures and docstrings out of the AST (no import, no credentials), starts the Rust binary, asks it for `tools/list` over stdio, and diffs. Exits non-zero on any mismatch. **Green at 37/37.** | same script |
 | SRF-12 | An impact preview names the action and never claims success | `guard::tests::a_preview_names_the_action_and_never_claims_success` | `test_guard.py::test_preview_shape` |
 | SRF-13 | The locator edit tools are registered destructive, and the insert tools expose their locator parameters | see `LOC-36` | see `LOC-36` |
 
 `SRF-11` cannot be a test inside either language: the Python side is source and the Rust side only
 exists at runtime over stdio. Discovery additionally pins its own schemas and descriptions in-tree
-(`DSC-20`); **Sheets, Docs and Files have no in-tree equivalent and depend entirely on the script.**
+(`DSC-20`); **Sheets, Docs, Files and Calendar still depend on the script for complete schema/docstring parity.**
+
+### 4.14 Calendar — 21 checks
+
+The Calendar implementation is new in both languages. Python drives the discovery client through
+a recording fake; Rust drives the matching `GoogleApi` trait and separately pins query parameters
+that are assembled below the fake seam. All four mutations are confirmation-gated and dry-runnable.
+
+| # | Claim | Rust | Python |
+|---|---|---|---|
+| CAL-1 | OAuth asks only for Drive plus narrow CalendarList-read, event, and free/busy scopes; an old Drive-only token fails with a directed re-consent instruction; the Rust auth URL requests incremental grants | `config::SCOPES`, `auth::tests::an_old_drive_only_token_requests_reconsent_for_calendar` | `test_config_requests_each_required_narrow_calendar_scope`, `test_old_drive_only_token_gets_a_directed_reconsent_error` |
+| CAL-2 | `list_calendars` forwards paging/access filters, clamps the API page size, and returns the stable bounded calendar shape | `calendar::tests::list_calendars_clamps_pages_and_returns_the_agent_facing_shape` | `test_list_calendars_clamps_pages_and_returns_a_stable_shape` |
+| CAL-3 | `list_events` expands recurring instances, orders by start, forwards query/paging/cancelled filters, clamps page size, and normalizes events | `calendar::tests::list_events_expands_recurrence_forwards_filters_and_normalizes` | `test_list_events_expands_recurrence_forwards_filters_and_normalizes` |
+| CAL-4 | Event windows default to now…+30 days, require offset-bearing RFC3339 values, and reject reversed bounds before I/O | `calendar::tests::list_events_rejects_naive_and_reversed_windows_before_the_api` | `test_list_events_rejects_naive_or_reversed_windows_before_the_api` |
+| CAL-5 | `get_event` uses the same stable event representation as a listing | `calendar::tests::get_event_uses_the_same_shape_as_list` | `test_get_event_returns_the_same_shape_as_list` |
+| CAL-6 | `query_freebusy` defaults to primary and preserves per-calendar busy intervals and errors without exposing event details | `calendar::tests::freebusy_defaults_to_primary_and_preserves_per_calendar_errors` | `test_freebusy_defaults_to_primary_and_preserves_per_calendar_errors` |
+| CAL-7 | Free/busy validates time order/IANA zone and rejects more than Google's 50-calendar limit before I/O | `calendar::tests::freebusy_enforces_the_api_calendar_limit_before_the_call` plus shared validators | `test_freebusy_rejects_more_than_google_allows` plus shared validators |
+| CAL-8 | `create_event` preview and dry-run make no insert, include notification impact, and default `send_updates` to `none` | `calendar::tests::create_previews_and_dry_runs_without_writing` | `test_create_previews_without_writing_and_dry_run_never_writes` |
+| CAL-9 | Confirmed create sends attendees, recurrence (including EXRULE), reminder overrides, Meet conference version, availability/visibility, notification policy, and optional caller-supplied id | `calendar::tests::confirmed_create_sends_attendees_reminders_recurrence_and_meet` | `test_confirmed_create_sends_attendees_reminders_recurrence_and_meet` |
+| CAL-10 | Timed events require offsets; all-day dates are ISO dates with an exclusive end and no illegal time-zone field | `calendar::tests::all_day_end_is_exclusive_and_dates_never_carry_a_timezone` | `test_all_day_dates_are_exclusive_and_do_not_carry_a_timezone` |
+| CAL-11 | Empty summaries, malformed ids/emails/recurrence/reminders, more than five reminders, a timed recurrence without a zone, and invalid zones/visibility/availability/notification modes fail before writing | `calendar::tests::high_risk_create_inputs_are_validated_before_preview` | `test_create_validates_high_risk_inputs_before_preview` |
+| CAL-12 | Update reads a live before-state, previews a merged after-state, distinguishes omitted lists from explicit clearing, and dry-run does not patch | `calendar::tests::update_previews_clears_and_confirmed_calls_patch_with_only_supplied_fields` | `test_update_reads_then_previews_and_distinguishes_clear_from_unset` |
+| CAL-13 | Confirmed update requires the previewed ETag, rejects a missing/stale value before mutation, sends only supplied fields, and carries that ETag in `If-Match` | Rust update tests including `confirmed_calendar_writes_require_the_preview_etag_and_reject_a_stale_one` | Python update tests including `test_confirmed_calendar_writes_require_the_preview_etag_and_reject_a_stale_one` |
+| CAL-14 | Update refuses an empty patch or half of a start/end pair before reading, and refuses turning a timed event into a series without supplying zoned start/end values | `calendar::tests::update_needs_a_change_and_paired_times_before_reading`, `update_requires_a_timezone_when_turning_a_timed_event_into_a_series` | `test_update_needs_a_change_and_paired_times`, `test_update_requires_a_timezone_when_turning_a_timed_event_into_a_series` |
+| CAL-15 | Delete's preview distinguishes a recurring master from an instance and does not delete | `calendar::tests::delete_identifies_a_series_and_calls_delete_only_after_confirmation` | `test_delete_identifies_series_and_only_deletes_after_confirmation` |
+| CAL-16 | Confirmed delete forwards notification policy and the live ETag | same Rust delete test | same Python delete test |
+| CAL-17 | RSVP validates accepted/tentative/declined, previews old/new status, and makes no unconfirmed patch | `calendar::tests::responding_preserves_other_attendees_and_changes_only_self` | `test_respond_preserves_other_attendees_and_only_changes_self` |
+| CAL-18 | Confirmed RSVP sends only the self attendee with `attendeesOmitted=true`, preserving every other participant, carries the live ETag, and refuses events without a self attendee | `calendar::tests::responding_uses_attendees_omitted_to_change_only_self`, `responding_requires_the_signed_in_attendee` | `test_respond_uses_attendees_omitted_to_change_only_self`, `test_respond_refuses_an_event_where_the_user_is_not_an_attendee` |
+| CAL-19 | All eight tools register in Python order with parity-identical schemas and correct read/destructive annotations | Calendar schema-order test, server unit/integration tests, `scripts/diff_tool_surface.py` | server integration tests, surface script |
+| CAL-20 | Calendar ids, summaries, descriptions, locations, attendee addresses and event content cannot enter the content-free audit log | `audit::tests::calendar_content_attendees_and_email_calendar_ids_are_never_recorded` | `test_calendar_content_attendees_and_email_calendar_ids_are_never_logged` |
+| CAL-21 | The hand-built Rust REST queries pin expanded chronological listings, page/search filters, explicit notification policy, and conference-data version | `clients::tests::calendar_queries_pin_expansion_order_paging_notifications_and_conference_version` | discovery client request kwargs are asserted in `tests/test_calendar.py` |
 
 ### Check counts
 
@@ -564,10 +596,12 @@ exists at runtime over stdio. Discovery additionally pins its own schemas and de
 | 4.11 Verification gate | 7 |
 | 4.12 Request layer, credentials and errors | 6 |
 | 4.13 Registered tool surface | 13 |
-| **Offline total** | **210** |
+| 4.14 Calendar | 21 |
+| **Offline total** | **231** |
 | 5.1 Live Docs (`L1`–`L10`) | 10 |
 | 5.2 Live Sheets (`S1`–`S11`) | 11 |
-| **Total** | **231** |
+| 5.3 Live Calendar (`C1`–`C12`) | 12 |
+| **Total** | **264** |
 
 ---
 
@@ -579,17 +613,16 @@ check passes. So every claim about how *Google* behaves — index units, what it
 value-input modes really differ upstream — is unfalsifiable offline. Only these runs can falsify
 them, and only for the implementation that ran.
 
-Both harnesses share a shape. **Double-latched**: `#[ignore]` (Rust) or `skipif` (Python) plus a
+All harnesses share a shape. **Double-latched**: `#[ignore]` (Rust) or `skipif` (Python) plus a
 `GDRIVE_MCP_LIVE` environment check, so an ordinary test run can never reach Google, and running
-the ignored test without the variable prints a skip and returns. **One scratch file**, created by
-the harness and trashed on teardown — on panic too, in the Rust harnesses, via
-`catch_unwind_async`. The scratch file's id is printed first, so a failed teardown is recoverable by
-hand. **All content is synthetic** (`S<n>-` tokens, `NEEDLE`, `ZAP`, `CELLONE`); no real document is
-read or described anywhere in these runs, and no id from a run appears in this document.
+the ignored test without the variable prints a skip and returns. **One scratch resource** is
+created and removed on teardown — on panic too, in the Rust harnesses, via `catch_unwind_async`.
+Its id is printed first, so a failed teardown is recoverable by hand. **All content is synthetic**
+(`S<n>-` tokens, `NEEDLE`, `ZAP`, `CELLONE`, or a `gdrive-mcp calendar live check` event); no real
+document or event is read or described anywhere in these runs, and no id from a run appears here.
 
-The Rust harnesses also carry a credential-free companion,
-`the_live_harness_targets_tools_that_exist`, which runs in the normal suite so a harness cannot rot
-into referencing tools that no longer exist.
+The Rust harnesses and the Python Calendar harness also carry credential-free companion tests that
+run in the normal suite, so a harness cannot rot into referencing tools that no longer exist.
 
 ### 5.1 Docs locator writes — `L1`–`L10`
 
@@ -679,6 +712,38 @@ and inspects the grid. Two caveats stay on the record:
   guaranteed part of the claim: the values are unchanged and the batch was accepted. **A green `S8`
   that took the fallback path has not verified the styling**, so read the run output, not just the
   exit code. The 2026-08-07 run did **not** take the fallback.
+
+### 5.3 Calendar — `C1`–`C12`
+
+    # Python
+    GDRIVE_MCP_LIVE=1 uv run pytest tests/test_live_calendar.py -v
+
+    # Rust
+    GDRIVE_MCP_LIVE=1 cargo test --manifest-path rust/Cargo.toml --test live_calendar -- --ignored --nocapture
+
+**Passed against a Google account in both implementations on 2026-09-08** (Python: 2 tests in
+9.48 s; Rust: 1 live test in 7.08 s). Each creates
+one synthetic two-occurrence series about 400 days in the future on the authenticated user's
+primary calendar, sets `send_updates=none`, prints its caller-supplied event id, and removes the
+series in teardown (including after a Rust panic). No existing calendar or event is used.
+
+| # | Claim under test | Pass condition | Observed |
+|---|---|---|---|
+| C1 | CalendarList access | primary calendar appears and authenticated email is available | passed Python + Rust, 2026-09-08 |
+| C2 | Create confirmation gate | preview contains the supplied id and a subsequent `events.get` is 404/410 | passed Python + Rust, 2026-09-08 |
+| C3 | Create dry-run | dry-run contains the supplied id and a subsequent `events.get` is 404/410 | passed Python + Rust, 2026-09-08 |
+| C4 | Rich confirmed create + `get_event` | id, summary, location, recurrence, visibility and ETag round-trip | passed Python + Rust, 2026-09-08 |
+| C5 | Expanded ordered listing, search and pagination | two instances are returned one per page and both point to the master id | passed Python + Rust, 2026-09-08 |
+| C6 | Free/busy | the first occurrence covers the expected busy interval | passed Python + Rust, 2026-09-08 |
+| C7 | ETag concurrency | an out-of-band patch advances the ETag; a patch carrying the stale ETag fails HTTP 412 and its text does not land | passed Python + Rust, 2026-09-08 |
+| C8 | Update confirmation gate | preview succeeds and a fresh get proves the summary unchanged | passed Python + Rust, 2026-09-08 |
+| C9 | Confirmed partial update | summary, description and availability round-trip through the tool | passed Python + Rust, 2026-09-08 |
+| C10 | RSVP | preview names the transition; confirmed response returns the self attendee as tentative | passed Python + Rust, 2026-09-08 |
+| C11 | Delete confirmation gate | preview identifies a series and a fresh get proves it still exists | passed Python + Rust, 2026-09-08 |
+| C12 | Confirmed series delete | delete reports success and a fresh get returns 404/410 or a cancelled tombstone | passed Python + Rust, 2026-09-08 |
+
+These checks intentionally keep attendee mail disabled. They verify `send_updates=none` against
+Google but do not send real notifications merely to prove that `externalOnly`/`all` sends them.
 
 ---
 
@@ -931,9 +996,15 @@ large tab spills a very large CSV.
 **The audit log is checked for what it omits, not for completeness.** `AUD-2`–`AUD-4` prove content
 never reaches it; nothing proves every call reaches it.
 
-**Authentication is verified at the serialisation layer only.** `REQ-5` proves the token file
-round-trips through the shape `google-auth` writes. No test in either language performs a real OAuth
-exchange or a refresh.
+**Authentication is automated at the serialisation layer only.** `REQ-5` proves the token file
+round-trips through the shape `google-auth` writes. A real incremental OAuth re-consent completed on
+2026-09-08 and the cached token exposed all four configured scopes; refresh behavior remains
+unverified by an automated live test.
+
+**Calendar live verification passed in both implementations on 2026-09-08.** `C1`–`C12`
+deliberately do not test attendee email delivery (`externalOnly`/`all`), Google Meet creation (which can depend on
+Workspace policy), delegated calendars, or responding as a genuinely external invitee. Offline
+tests pin those request shapes and safety defaults, but cannot establish tenant-specific behavior.
 
 **`format_cells`' effect on real formatting is unverified in Python.** `S8` settles it for Rust.
 There is no Python live Sheets harness.
@@ -958,26 +1029,28 @@ Not defects. Each is a decision, and each is pinned or documented as such rather
 
 ```bash
 # Python — the behaviour of record
-uv run pytest -q                                   # 188 passed, 10 skipped (the live harness)
+uv run pytest -q                                   # 249 passed, 11 skipped (the live harnesses)
 
 # Rust — unit + integration, no credentials needed
-cargo test --manifest-path rust/Cargo.toml         # 393 passed, 2 ignored (the live harnesses)
+cargo test --manifest-path rust/Cargo.toml         # 420 passed, 3 ignored (the live harnesses)
 cargo clippy --all-targets --manifest-path rust/Cargo.toml
 cargo fmt --check --manifest-path rust/Cargo.toml
 
 # Cross-implementation surface parity (SRF-11)
 cargo build --release --manifest-path rust/Cargo.toml
-python3 scripts/diff_tool_surface.py               # tool surfaces match: 29 tools
+python3 scripts/diff_tool_surface.py               # tool surfaces match: 37 tools
 
-# Live, credentialed. Writes to the authenticated account's Drive. Never run these in CI.
+# Live, credentialed. Writes disposable resources to the authenticated account. Never run in CI.
 GDRIVE_MCP_LIVE=1 uv run pytest tests/test_live_locator.py -v
+GDRIVE_MCP_LIVE=1 uv run pytest tests/test_live_calendar.py -v
 GDRIVE_MCP_LIVE=1 cargo test --manifest-path rust/Cargo.toml --test live_locator -- --ignored --nocapture
 GDRIVE_MCP_LIVE=1 cargo test --manifest-path rust/Cargo.toml --test live_sheets  -- --ignored --nocapture
+GDRIVE_MCP_LIVE=1 cargo test --manifest-path rust/Cargo.toml --test live_calendar -- --ignored --nocapture
 ```
 
 Without `GDRIVE_MCP_LIVE` the Rust live tests are `#[ignore]`d and, if run anyway with `--ignored`,
 print a skip and return; the Python ones are `skipif`-ed. Each live harness prints its scratch
-file's id before it starts writing, so a failed teardown is recoverable by hand.
+resource id before it starts writing, so a failed teardown is recoverable by hand.
 
 ## 10. Exit checklist
 
@@ -995,13 +1068,14 @@ Checked where a test or a recorded run backs the box. Unchecked where work is ge
 - [x] `FIL-1`–`FIL-24` (Files) present in `rust/src/tools/files.rs`
 - [x] `SBX-1`–`SBX-6` (sandbox and retention) present in `rust/src/localfs.rs` and `tests/test_localfs.py`
 - [x] `AUD-1`–`AUD-6`, `GAT-1`–`GAT-7`, `REQ-1`–`REQ-6`, `SRF-1`–`SRF-13` present in `rust/src/{audit,gating,clients,auth,config,error,server,guard,args}.rs`, `rust/src/tools/mod.rs`, `rust/tests/server_integration.rs`, `tests/test_audit.py`, `tests/test_gating.py`, `tests/test_guard.py`, `tests/test_server_integration.py`
+- [x] `CAL-1`–`CAL-21` (Calendar reads, mutations, OAuth, concurrency and privacy) present in `rust/src/tools/calendar.rs`, `rust/src/clients.rs`, `rust/src/auth.rs`, `tests/test_calendar.py`, and both live harnesses
 
 **Suite health**
 
-- [x] `uv run pytest -q` green — 216 passed, 10 skipped
-- [x] `cargo test --manifest-path rust/Cargo.toml` green — 396 passed, 2 ignored
+- [x] `uv run pytest -q` green — 249 passed, 11 skipped
+- [x] `cargo test --manifest-path rust/Cargo.toml` green — 420 passed, 3 ignored
 - [x] `cargo clippy --all-targets` and `cargo fmt --check` clean
-- [x] `scripts/diff_tool_surface.py` green at 29/29 against a release binary
+- [x] `scripts/diff_tool_surface.py` green at 37/37 against a release binary
 
 **Live runs**
 
@@ -1013,6 +1087,9 @@ Checked where a test or a recorded run backs the box. Unchecked where work is ge
       implementations send byte-identical requests, so the checks that are purely about *Google's*
       semantics (`S1`, `S2`, `S10`) transfer. The ones that do not are the implementation's own
       logic — the gate (`S4`, `S11`), the spill (`S7`) and A1 quoting (`S9`)
+- [x] `C1`–`C12` against a live scratch Calendar event, **Python and Rust** — Python 2 tests passed
+      in 9.48 s and Rust 1 live test passed in 7.08 s, 2026-09-08; incremental Calendar re-consent
+      succeeded and both scratch series were deleted
 
 **Defects**
 

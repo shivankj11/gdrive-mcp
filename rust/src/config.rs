@@ -6,7 +6,12 @@ use std::path::{Path, PathBuf};
 /// Full read/write Drive access ("view and manage all your Drive files"). This is a
 /// restricted scope; OAuth verification and administrator-policy requirements depend on
 /// the deployment. Per-user consent bounds access to files available to the signed-in user.
-pub const SCOPES: &[&str] = &["https://www.googleapis.com/auth/drive"];
+pub const SCOPES: &[&str] = &[
+    "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+    "https://www.googleapis.com/auth/calendar.events",
+    "https://www.googleapis.com/auth/calendar.events.freebusy",
+];
 
 const APP_DIR_NAME: &str = "gdrive-mcp";
 

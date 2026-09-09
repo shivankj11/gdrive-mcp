@@ -1055,8 +1055,9 @@ mod tests {
     async fn a_spilled_csv_is_readable_only_by_its_owner() {
         use std::os::unix::fs::PermissionsExt;
         let _sandbox = Sandbox::open();
-        let api = fake_sheets(json!([["mrn", "dx"], ["123", "flu"]]), &[("Data", 1)]);
-        let out = run(&api, "read_full_sheet", json!({"item": SID, "dest_path": "phi.csv"})).await.unwrap();
+        let api = fake_sheets(json!([["field", "detail"], ["123", "private"]]), &[("Data", 1)]);
+        let out =
+            run(&api, "read_full_sheet", json!({"item": SID, "dest_path": "sensitive.csv"})).await.unwrap();
         let mode = std::fs::metadata(out["path"].as_str().unwrap()).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600); // the spill can hold sensitive data, so no other local account may read it
     }
@@ -1068,7 +1069,7 @@ mod tests {
         // regression leaves an observable CSV next to the sandbox rather than in /etc.
         let absolute = sandbox.root.parent().unwrap().join("loot.csv");
         for escape in [absolute.to_str().unwrap(), "../loot.csv", "sub/../../loot.csv"] {
-            let api = fake_sheets(json!([["mrn", "dx"]]), &[("Data", 1)]);
+            let api = fake_sheets(json!([["field", "detail"]]), &[("Data", 1)]);
             let err =
                 run(&api, "read_full_sheet", json!({"item": SID, "dest_path": escape})).await.unwrap_err();
             assert!(err.to_string().contains("must stay within the files dir"), "{escape}: {err}");

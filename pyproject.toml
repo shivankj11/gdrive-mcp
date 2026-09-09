@@ -1,7 +1,7 @@
 [project]
 name = "gdrive-mcp"
 version = "0.1.0"
-description = "Google Drive / Docs / Sheets MCP (read/write) for agents — browser-OAuth, local stdio."
+description = "Google Drive / Docs / Sheets / Calendar MCP (read/write) for agents — browser-OAuth, local stdio."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

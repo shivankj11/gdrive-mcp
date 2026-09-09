@@ -781,10 +781,10 @@ mod tests {
         let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let sandbox = Sandbox::new();
         let api = FakeApi::new();
-        api.on("drive_files_get", meta("application/zip", "phi.zip"));
+        api.on("drive_files_get", meta("application/zip", "sensitive.zip"));
         api.on_bytes("drive_get_media", b"pk".to_vec());
-        ok(&api, "download_file", json!({"item": AN_ID, "dest_path": "phi.zip"})).await;
-        let mode = std::fs::metadata(sandbox.path("phi.zip")).unwrap().permissions().mode() & 0o777;
+        ok(&api, "download_file", json!({"item": AN_ID, "dest_path": "sensitive.zip"})).await;
+        let mode = std::fs::metadata(sandbox.path("sensitive.zip")).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
     }
 

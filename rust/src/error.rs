@@ -10,8 +10,9 @@ use std::fmt;
 /// Status-keyed hints appended to a Google API error message.
 fn hint(status: u16) -> &'static str {
     match status {
-        403 => " (is the API enabled for this project and the drive scope granted?)",
+        403 => " (is the required Google API enabled and its OAuth scope granted?)",
         404 => " (check the ID/URL and that your account has access)",
+        412 => " (the resource changed after preview; read it again before retrying)",
         429 => " (rate limited — retry shortly)",
         _ => "",
     }

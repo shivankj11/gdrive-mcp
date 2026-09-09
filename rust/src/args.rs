@@ -176,6 +176,22 @@ impl Args {
         }
     }
 
+    /// A list of JSON objects, used for structured Calendar reminder inputs.
+    pub fn opt_object_list(&self, key: &str) -> Result<Option<Vec<Map<String, Value>>>> {
+        match self.container(key).as_deref() {
+            None => Ok(None),
+            Some(Value::Array(items)) => items
+                .iter()
+                .map(|v| match v {
+                    Value::Object(obj) => Ok(obj.clone()),
+                    other => Err(self.wrong_type(key, "a list of objects", other)),
+                })
+                .collect::<Result<Vec<_>>>()
+                .map(Some),
+            Some(other) => Err(self.wrong_type(key, "a list of objects", other)),
+        }
+    }
+
     /// A grid: a list of row lists whose cells stay untyped (`write_sheet`, `insert_table`).
     /// Shape beyond "list of lists" is the caller's to validate — Sheets accepts ragged rows,
     /// Docs tables do not.

@@ -5,6 +5,7 @@
 //! argument list from its schema's `properties`, so a schema and its handler can never disagree
 //! about which arguments exist.
 
+pub mod calendar;
 pub mod discovery;
 pub mod docs;
 pub mod files;
@@ -80,6 +81,7 @@ pub fn all_defs() -> Vec<ToolDef> {
     out.extend(sheets::defs());
     out.extend(docs::defs());
     out.extend(files::defs());
+    out.extend(calendar::defs());
     out
 }
 
@@ -95,6 +97,9 @@ pub async fn dispatch(name: &str, api: &dyn GoogleApi, args: &Args) -> Result<To
         return r;
     }
     if let Some(r) = files::dispatch(name, api, args).await {
+        return r;
+    }
+    if let Some(r) = calendar::dispatch(name, api, args).await {
         return r;
     }
     Err(crate::error::ToolError::msg(format!("unknown tool: {name}")))
@@ -116,7 +121,7 @@ pub mod testing {
     use async_trait::async_trait;
     use serde_json::{json, Value};
 
-    use crate::clients::GoogleApi;
+    use crate::clients::{CalendarEventsListParams, GoogleApi};
     use crate::error::{Result, ToolError};
 
     #[derive(Debug, Clone, PartialEq)]
@@ -337,6 +342,98 @@ pub mod testing {
         async fn sheets_batch_update(&self, spreadsheet_id: &str, body: &Value) -> Result<Value> {
             self.take("sheets_batch_update", json!({"spreadsheet_id": spreadsheet_id, "body": body}))
         }
+        async fn calendar_list(
+            &self,
+            max_results: i64,
+            page_token: Option<&str>,
+            min_access_role: Option<&str>,
+            show_hidden: bool,
+        ) -> Result<Value> {
+            self.take(
+                "calendar_list",
+                json!({
+                    "max_results": max_results,
+                    "page_token": page_token,
+                    "min_access_role": min_access_role,
+                    "show_hidden": show_hidden,
+                }),
+            )
+        }
+        async fn calendar_events_list(&self, params: CalendarEventsListParams<'_>) -> Result<Value> {
+            self.take(
+                "calendar_events_list",
+                json!({
+                    "calendar_id": params.calendar_id,
+                    "time_min": params.time_min,
+                    "time_max": params.time_max,
+                    "query": params.query,
+                    "max_results": params.max_results,
+                    "page_token": params.page_token,
+                    "show_deleted": params.show_deleted,
+                }),
+            )
+        }
+        async fn calendar_events_get(&self, calendar_id: &str, event_id: &str) -> Result<Value> {
+            self.take("calendar_events_get", json!({"calendar_id": calendar_id, "event_id": event_id}))
+        }
+        async fn calendar_freebusy(&self, body: &Value) -> Result<Value> {
+            self.take("calendar_freebusy", json!({"body": body}))
+        }
+        async fn calendar_events_insert(
+            &self,
+            calendar_id: &str,
+            body: &Value,
+            send_updates: &str,
+            conference_data_version: i64,
+        ) -> Result<Value> {
+            self.take(
+                "calendar_events_insert",
+                json!({
+                    "calendar_id": calendar_id,
+                    "body": body,
+                    "send_updates": send_updates,
+                    "conference_data_version": conference_data_version,
+                }),
+            )
+        }
+        async fn calendar_events_patch(
+            &self,
+            calendar_id: &str,
+            event_id: &str,
+            body: &Value,
+            send_updates: &str,
+            conference_data_version: i64,
+            etag: Option<&str>,
+        ) -> Result<Value> {
+            self.take(
+                "calendar_events_patch",
+                json!({
+                    "calendar_id": calendar_id,
+                    "event_id": event_id,
+                    "body": body,
+                    "send_updates": send_updates,
+                    "conference_data_version": conference_data_version,
+                    "etag": etag,
+                }),
+            )
+        }
+        async fn calendar_events_delete(
+            &self,
+            calendar_id: &str,
+            event_id: &str,
+            send_updates: &str,
+            etag: Option<&str>,
+        ) -> Result<Value> {
+            self.take(
+                "calendar_events_delete",
+                json!({
+                    "calendar_id": calendar_id,
+                    "event_id": event_id,
+                    "send_updates": send_updates,
+                    "etag": etag,
+                }),
+            )
+        }
         async fn fetch_image(&self, uri: &str) -> Result<Option<(Vec<u8>, String)>> {
             self.record("fetch_image", json!({"uri": uri}));
             Ok(self.image.lock().unwrap().clone())
@@ -355,7 +452,7 @@ mod tests {
     #[test]
     fn every_tool_forbids_unknown_arguments_and_names_itself() {
         let defs = all_defs();
-        assert_eq!(defs.len(), 29, "tool count should match the Python server");
+        assert_eq!(defs.len(), 37, "tool count should match the Python server");
         let mut seen = std::collections::HashSet::new();
         for d in &defs {
             assert!(seen.insert(d.name), "duplicate tool name {}", d.name);
@@ -407,6 +504,10 @@ mod tests {
         "format_cells",
         "clear_range",
         "delete_rows",
+        "create_event",
+        "update_event",
+        "delete_event",
+        "respond_to_event",
     ];
     const README_CONFIRM_TOOLS: &[&str] = &[
         "delete_text",
@@ -417,6 +518,10 @@ mod tests {
         "upload_file",
         "move_file",
         "rename_file",
+        "create_event",
+        "update_event",
+        "delete_event",
+        "respond_to_event",
     ];
 
     #[test]

@@ -35,6 +35,11 @@ def docs():
 
 
 @lru_cache(maxsize=1)
+def calendar():
+    return build("calendar", "v3", credentials=_creds(), cache_discovery=False)
+
+
+@lru_cache(maxsize=1)
 def authed_session() -> AuthorizedSession:
     """For fetching short-lived Docs image contentUris, which require Authorization."""
     return AuthorizedSession(_creds())

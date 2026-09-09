@@ -43,7 +43,7 @@ def run_auth_flow() -> Credentials:
     flow = InstalledAppFlow.from_client_secrets_file(str(client_path), SCOPES)
     # Loopback redirect (127.0.0.1:<random free port>). prompt=consent forces Google
     # to return a refresh token so the server never needs the browser again.
-    creds = flow.run_local_server(port=0, prompt="consent")
+    creds = flow.run_local_server(port=0, prompt="consent", include_granted_scopes="true")
     _write_token(creds)
     return creds
 
@@ -56,7 +56,16 @@ def load_credentials() -> Credentials:
     path = token_path()
     if not path.exists():
         raise AuthError(f"No cached credentials at {path}. Run `gdrive-mcp auth` first.")
-    creds = Credentials.from_authorized_user_info(json.loads(path.read_text()), SCOPES)
+    info = json.loads(path.read_text())
+    granted = set(info.get("scopes") or ())
+    missing = set(SCOPES) - granted
+    if missing:
+        names = ", ".join(sorted(scope.rsplit("/", 1)[-1] for scope in missing))
+        raise AuthError(
+            f"Cached credentials at {path} do not grant the required scopes ({names}). "
+            "Run `gdrive-mcp auth` again to approve the added access."
+        )
+    creds = Credentials.from_authorized_user_info(info, SCOPES)
     if creds.valid:
         return creds
     if creds.expired and creds.refresh_token:

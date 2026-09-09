@@ -8,7 +8,10 @@ use gdrive_mcp::clients::{GoogleApi, GoogleClient};
 use gdrive_mcp::config::token_path;
 
 #[derive(Parser)]
-#[command(name = "gdrive-mcp", about = "Google Drive / Docs / Sheets MCP (read/write) — auth + serve.")]
+#[command(
+    name = "gdrive-mcp",
+    about = "Google Drive / Docs / Sheets / Calendar MCP (read/write) — auth + serve."
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -55,7 +58,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             let user = authed_user(&creds).await?;
             let email = field(&user, "emailAddress");
             println!(
-                "Authenticated as {}.\nToken cached at {} (read/write Drive access).",
+                "Authenticated as {}.\nToken cached at {} (read/write Drive and Calendar event access).",
                 if email.is_empty() { "unknown" } else { email },
                 token_path().display()
             );

@@ -1,10 +1,10 @@
 # gdrive-mcp
 
-A read/write MCP for Google Drive, Docs & Sheets that fixes what trips agents on naive Drive servers — whole-document context floods, unguarded destructive writes, and inconsistent argument names — with bounded/paged reads, spill-to-disk for full data, confirm-gated mutations, and one consistent `item` argument.
+A read/write MCP for Google Drive, Docs, Sheets & Calendar that fixes what trips agents on naive Google Workspace servers — context floods, unguarded destructive writes, surprise attendee notifications, and inconsistent argument names — with bounded/paged reads, spill-to-disk for full data, and confirm-gated mutations.
 
-> Conventions: every tool takes its target as **`item`** (a URL or ID); unknown args are rejected; destructive tools (ᶜ) return an impact preview unless called with `confirm=true`.
+> Conventions: Drive/Docs/Sheets tools take their target as **`item`** (a URL or ID); Calendar tools use explicit `calendar_id`/`event_id` arguments. Unknown args are rejected; destructive tools (ᶜ) return an impact preview unless called with `confirm=true`.
 >
-> **Dry-run (edit-only):** the edit tools for *existing* files — `append_text`, `insert_text`, `insert_table`, `delete_text`, `replace_text`, `write_sheet`, `append_rows`, `format_cells`, `clear_range`, `delete_rows` — accept `dry_run=true`, returning a predicted before/after **without writing** (client-side; `write_sheet` shows formula cells literally, so Google's recalculation isn't simulated, and Docs `insert_text` reports the insertion point rather than a merged string). Dry-runs are still subject to the verification gate.
+> **Dry-run (edit-only):** the edit tools for *existing* files — `append_text`, `insert_text`, `insert_table`, `delete_text`, `replace_text`, `write_sheet`, `append_rows`, `format_cells`, `clear_range`, `delete_rows` — plus all Calendar mutation tools accept `dry_run=true`, returning a predicted before/after **without writing** (client-side; `write_sheet` shows formula cells literally, so Google's recalculation isn't simulated, and Docs `insert_text` reports the insertion point rather than a merged string). Dry-runs are still subject to the verification gate.
 >
 > **Editing a Doc by content, not by offset:** `delete_text`/`replace_text` (and `insert_text`/`insert_table`'s `after`/`before`) locate their target with a **locator** — `match` (a literal, case-sensitive substring lying within one paragraph) or `section` (a heading's exact text, covering that heading and everything under it up to the next heading of the same or higher level). Character offsets into `read_document`'s content are **not** valid Docs indexes: that content is rendered markdown (heading prefixes, synthesized table delimiter rows, escaped pipes) and does not align with the document's UTF-16 index space. The server resolves locators against the API's own element offsets instead, so anchors are always valid — and for block content they land on a paragraph boundary by construction. Each `read_document` `outline` entry also carries real `start`/`end` offsets, plus a `revision_id`; locator writes pin that revision, so a concurrent edit makes the write **fail** rather than land on shifted text.
 >
@@ -49,6 +49,18 @@ A read/write MCP for Google Drive, Docs & Sheets that fixes what trips agents on
 - **`clear_range`**ᶜ — clear the values in an A1 range.
 - **`delete_rows`**ᶜ — delete N rows from a tab.
 
+**Calendar**
+- **`list_calendars`** — list subscribed calendars with time zone, access role, and pagination.
+- **`list_events`** — list expanded event instances in a bounded time window, with search and pagination.
+- **`get_event`** — retrieve one event by calendar ID and API event ID.
+- **`query_freebusy`** — retrieve availability-only busy intervals for up to 50 calendars.
+- **`create_event`**ᶜ — create timed/all-day or recurring events with optional attendees, reminders, and Google Meet; supports caller-supplied IDs for idempotent retries.
+- **`update_event`**ᶜ — partially update an event with a live before/after preview and preview-bound ETag concurrency protection.
+- **`delete_event`**ᶜ — delete one event, recurring instance, or recurring series with a live preview and preview-bound ETag protection.
+- **`respond_to_event`**ᶜ — accept, tentatively accept, or decline an invitation without changing other attendees' responses, with preview-bound ETag protection.
+
+Calendar writes default to `send_updates=none`; callers must explicitly select `externalOnly` or `all` to email attendees. Every Calendar mutation previews unless called with `confirm=true`, and `dry_run=true` never writes even when confirmed. For update, delete, and RSVP, copy the previewed event `etag` into the confirmed call; if the event changed after preview, the write is refused. Timed values require RFC3339 offsets, recurring timed events also require an IANA `time_zone`, all-day end dates are exclusive, and Google permits at most five reminder overrides.
+
 **Files**
 - **`read_file_as_text`** — a file's content as text in bounded chunks (Google-native exported; PDFs text-extracted).
 - **`download_file`** — download a binary file (base64 if small, else written to disk).
@@ -70,13 +82,17 @@ git clone https://github.com/shivankj11/gdrive-mcp.git && cd gdrive-mcp && bash 
 ## Setup (one-time, per Google account)
 
 1. In a Google Cloud project you control, create an **OAuth client** (Application type **Desktop app**) and configure its consent screen. The `drive` scope is restricted, so follow Google's verification requirements (for personal use, add yourself as a test user).
-2. Enable the [Drive](https://console.cloud.google.com/apis/library/drive.googleapis.com), [Docs](https://console.cloud.google.com/apis/library/docs.googleapis.com), and [Sheets](https://console.cloud.google.com/apis/library/sheets.googleapis.com) APIs (all three are authorized by the single `drive` scope, but each must be enabled once).
+2. Enable the [Drive](https://console.cloud.google.com/apis/library/drive.googleapis.com), [Docs](https://console.cloud.google.com/apis/library/docs.googleapis.com), [Sheets](https://console.cloud.google.com/apis/library/sheets.googleapis.com), and [Calendar](https://console.cloud.google.com/apis/library/calendar-json.googleapis.com) APIs. Drive/Docs/Sheets use the `drive` scope; Calendar uses separate narrow calendar-list, event, and free/busy scopes.
 3. Save the client JSON to `~/.config/gdrive-mcp/oauth_client.json` (or set `GDRIVE_MCP_OAUTH_CLIENT`), then:
 
 ```bash
 uv run gdrive-mcp auth      # one-time loopback-OAuth browser consent; caches a token
 uv run gdrive-mcp whoami    # verify
 ```
+
+An older cached token that predates Calendar support is rejected with a directed re-consent
+message. Run `uv run gdrive-mcp auth` again to grant the added narrow Calendar scopes; existing
+Drive access is retained through incremental authorization.
 
 You authenticate as **yourself**, so the server can only reach what your own Google account already can.
 
@@ -88,7 +104,7 @@ claude mcp add gdrive -- uv run --directory /path/to/gdrive-mcp gdrive-mcp serve
 
 ## Rust implementation (`rust/`)
 
-`rust/` holds a second, self-contained implementation of the same server — same 29 tools, same
+`rust/` holds a second, self-contained implementation of the same server — same 37 tools, same
 argument names, same result shapes, same confirm/dry-run/locator/gate semantics — as a single
 static binary with no Python runtime. The two are interchangeable: they read the **same**
 `~/.config/gdrive-mcp/oauth_client.json` and write the **same** `token.json` (byte-compatible with

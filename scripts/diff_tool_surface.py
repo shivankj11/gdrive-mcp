@@ -26,7 +26,7 @@ import subprocess
 import sys
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
-TOOL_MODULES = ("discovery", "sheets", "docs", "files")
+TOOL_MODULES = ("discovery", "sheets", "docs", "files", "calendar")
 DEFAULT_BINARY = REPO / "rust" / "target" / "release" / "gdrive-mcp"
 
 # Module-level constants used as parameter defaults. Resolved by name because the AST holds the

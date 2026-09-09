@@ -8,7 +8,14 @@ from pathlib import Path
 # Full read/write Drive access ("view and manage all your Drive files"). This is a
 # restricted scope; OAuth verification and administrator-policy requirements depend on
 # the deployment. Per-user consent bounds access to files available to the signed-in user.
-SCOPES = ["https://www.googleapis.com/auth/drive"]
+SCOPES = [
+    "https://www.googleapis.com/auth/drive",
+    # Calendar access is deliberately split rather than using the broad `calendar` scope,
+    # which would also allow changing calendar properties, sharing, and deleting calendars.
+    "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+    "https://www.googleapis.com/auth/calendar.events",
+    "https://www.googleapis.com/auth/calendar.events.freebusy",
+]
 
 _APP_DIR_NAME = "gdrive-mcp"
 

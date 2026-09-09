@@ -29,7 +29,7 @@ _TRUTHY = {"always", "1", "true", "yes", "on"}
 
 
 class _Approval(BaseModel):
-    approved: bool = Field(description="Approve this verification-gated Google Drive action?")
+    approved: bool = Field(description="Approve this verification-gated Google Workspace action?")
 
 
 def _normalize_model(value: str) -> str:

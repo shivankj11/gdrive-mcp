@@ -238,7 +238,7 @@ const AN_ID: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 #[tokio::test]
 async fn every_tool_is_registered_with_the_right_annotations() {
     let tools = list_tools().await;
-    assert_eq!(tools.len(), 29);
+    assert_eq!(tools.len(), 37);
     assert_eq!(find(&tools, "read_sheet").annotations.as_ref().unwrap().read_only_hint, Some(true));
     assert_eq!(find(&tools, "delete_rows").annotations.as_ref().unwrap().destructive_hint, Some(true));
     for additive in ["append_text", "create_document", "insert_table"] {
