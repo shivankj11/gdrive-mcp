@@ -1,0 +1,21 @@
+rust/src/server.rs
+  s_5806ef2c49cec6::t_b814db7cbde9cc 6-7,175-178
+rust/tests/server_integration.rs
+  s_5806ef2c49cec6::t_6762115c4347db 181-230
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "c763b7b6b2862e79db31e7c7b350dcf3318c7ff4",
+  "prompts": {},
+  "sessions": {
+    "s_5806ef2c49cec6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a088dc-fbd6-7172-8d51-a7d9265aefff",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Shivank Joshi <89424061+shivankj11@users.noreply.github.com>"
+    }
+  }
+}
