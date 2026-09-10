@@ -81,6 +81,12 @@ git clone https://github.com/shivankj11/gdrive-mcp.git && cd gdrive-mcp && bash 
 
 ## Setup (one-time, per Google account)
 
+**Required prerequisite: Google Desktop-app OAuth client JSON.** Neither the binary
+nor `auth` creates this file. Senders and recipients of a binary/zip should follow
+[Binary handoff: packaging, credentials, and installation](docs/BINARY_HANDOFF.md).
+The packager can include the app configuration in a private archive; every recipient
+still signs in as themselves to create their own token.
+
 1. In a Google Cloud project you control, create an **OAuth client** (Application type **Desktop app**) and configure its consent screen. The `drive` scope is restricted, so follow Google's verification requirements (for personal use, add yourself as a test user).
 2. Enable the [Drive](https://console.cloud.google.com/apis/library/drive.googleapis.com), [Docs](https://console.cloud.google.com/apis/library/docs.googleapis.com), [Sheets](https://console.cloud.google.com/apis/library/sheets.googleapis.com), and [Calendar](https://console.cloud.google.com/apis/library/calendar-json.googleapis.com) APIs. Drive/Docs/Sheets use the `drive` scope; Calendar uses separate narrow calendar-list, event, and free/busy scopes.
 3. Save the client JSON to `~/.config/gdrive-mcp/oauth_client.json` (or set `GDRIVE_MCP_OAUTH_CLIENT`), then:
@@ -113,6 +119,7 @@ static binary with no Python runtime. The two are interchangeable: they read the
 
 ```bash
 cargo install --path rust        # or: cargo build --release --manifest-path rust/Cargo.toml
+# First install Desktop-app OAuth JSON; see Setup above and docs/BINARY_HANDOFF.md.
 gdrive-mcp auth                  # one-time browser consent (skip if the Python side already ran it)
 gdrive-mcp whoami                # verify
 claude mcp add gdrive -- gdrive-mcp serve
