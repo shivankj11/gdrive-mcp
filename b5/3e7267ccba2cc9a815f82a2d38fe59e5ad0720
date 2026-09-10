@@ -1,0 +1,27 @@
+AGENTS.md
+  s_5806ef2c49cec6::t_92d9f08855d42a 1-15
+README.md
+  s_5806ef2c49cec6::t_142af41837526c 84-89,122
+docs/BINARY_HANDOFF.md
+  s_5806ef2c49cec6::t_6f4b13b2b1f0f5 1-149
+scripts/package_binary.py
+  s_5806ef2c49cec6::t_ca0f27f583ff87 1-103
+tests/test_package_binary.py
+  s_5806ef2c49cec6::t_8f0730d51846ed 1-94
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "b53e7267ccba2cc9a815f82a2d38fe59e5ad0720",
+  "prompts": {},
+  "sessions": {
+    "s_5806ef2c49cec6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a088dc-fbd6-7172-8d51-a7d9265aefff",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Shivank Joshi <89424061+shivankj11@users.noreply.github.com>"
+    }
+  }
+}
