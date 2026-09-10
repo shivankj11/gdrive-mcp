@@ -178,6 +178,56 @@ async fn list_tools() -> Vec<Tool> {
     tools
 }
 
+/// Check raw JSON: rmcp's client accepts absent cache fields, but strict modern clients
+/// reject the entire tool list when either required field is missing.
+#[tokio::test]
+async fn discover_then_list_tools_includes_required_cache_fields_on_the_wire() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let (server_side, client_side) = tokio::io::duplex(64 * 1024);
+        let (sr, sw) = tokio::io::split(server_side);
+        let server = tokio::spawn(async move {
+            let running = GdriveServer::new(Arc::new(OfflineApi)).serve((sr, sw)).await.unwrap();
+            running.waiting().await.unwrap();
+        });
+        let (cr, mut cw) = tokio::io::split(client_side);
+        let mut lines = BufReader::new(cr).lines();
+
+        for (id, method) in [(1, "server/discover"), (2, "tools/list")] {
+            let request = json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": method,
+                "params": {"_meta": {
+                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                    "io.modelcontextprotocol/clientInfo": {"name": "wire-test", "version": "0"},
+                    "io.modelcontextprotocol/clientCapabilities": {}
+                }}
+            });
+            cw.write_all(format!("{request}\n").as_bytes()).await.unwrap();
+            let line = lines.next_line().await.unwrap().expect("JSON-RPC response");
+            let response: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(response["id"], id);
+            assert!(response.get("error").is_none(), "{response}");
+            let result = &response["result"];
+            assert_eq!(result["resultType"], "complete", "{method}");
+            assert_eq!(result["ttlMs"], 0, "{method} must declare a TTL");
+            assert_eq!(result["cacheScope"], "private", "{method} must declare a cache scope");
+            if method == "tools/list" {
+                let tools = result["tools"].as_array().expect("tool list");
+                assert!(tools.iter().any(|tool| tool["name"] == "search_files"));
+            }
+        }
+
+        drop(cw);
+        drop(lines);
+        server.await.unwrap();
+    })
+    .await
+    .expect("discovery and tool listing must finish promptly");
+}
+
 async fn call(tool: &str, args: Value, elicit: Elicit) -> CallToolResult {
     let client = connect(elicit).await;
     let arguments: Map<String, Value> = args.as_object().cloned().unwrap_or_default();
