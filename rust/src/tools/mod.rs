@@ -452,7 +452,7 @@ mod tests {
     #[test]
     fn every_tool_forbids_unknown_arguments_and_names_itself() {
         let defs = all_defs();
-        assert_eq!(defs.len(), 37, "tool count should match the Python server");
+        assert_eq!(defs.len(), 38, "tool count should match the Python server");
         let mut seen = std::collections::HashSet::new();
         for d in &defs {
             assert!(seen.insert(d.name), "duplicate tool name {}", d.name);

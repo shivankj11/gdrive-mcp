@@ -42,13 +42,14 @@ def _text(result) -> str:
 def test_registered_tools_and_annotations():
     listed = asyncio.run(_list())
     by_name = {t.name: t for t in listed.tools}
-    assert len(by_name) == 37
+    assert len(by_name) == 38
     assert by_name["read_sheet"].annotations.readOnlyHint is True
     assert by_name["delete_rows"].annotations.destructiveHint is True
     assert by_name["append_text"].annotations.destructiveHint is False
     assert by_name["create_document"].annotations.destructiveHint is False
     assert by_name["insert_table"].annotations.destructiveHint is False  # additive, not destructive
     assert by_name["format_cells"].annotations.readOnlyHint is False
+    assert by_name["import_excel_as_sheet"].annotations.destructiveHint is False  # only ever creates
     for name in ("list_calendars", "list_events", "get_event", "query_freebusy"):
         assert by_name[name].annotations.readOnlyHint is True
     for name in ("create_event", "update_event", "delete_event", "respond_to_event"):

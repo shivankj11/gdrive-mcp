@@ -35,6 +35,12 @@ const EXPORT_MIME: &[(&str, &str)] = &[
     ("html", "text/html"),
 ];
 
+/// Excel formats Drive can convert on import, keyed by lowercase file extension.
+const EXCEL_MIME: &[(&str, &str)] = &[
+    (".xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+    (".xls", "application/vnd.ms-excel"),
+];
+
 const GOOGLE_EXPORT_TEXT: &[(&str, &str)] = &[
     ("application/vnd.google-apps.document", "text/plain"),
     ("application/vnd.google-apps.spreadsheet", "text/csv"),
@@ -228,6 +234,39 @@ async fn upload_file(api: &dyn GoogleApi, args: &Args) -> Result<ToolOutput> {
     .into())
 }
 
+async fn import_excel_as_sheet(api: &dyn GoogleApi, args: &Args) -> Result<ToolOutput> {
+    let source_path = args.req_str("source_path")?;
+    let name = nonempty(args.opt_str("name")?);
+    let parent = nonempty(args.opt_str("parent")?);
+
+    let path = safe_read_path(&source_path)?;
+    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+    let ext = path.extension().and_then(|e| e.to_str()).map(|e| format!(".{}", e.to_lowercase()));
+    let Some(mime) = ext.as_deref().and_then(|e| lookup(EXCEL_MIME, e)) else {
+        return Err(ToolError::msg(format!("{file_name} is not an Excel file; expected .xlsx or .xls")));
+    };
+    // Setting the target mimeType in the metadata is what makes Drive convert the upload rather
+    // than store the .xlsx as an opaque file.
+    let name =
+        name.unwrap_or_else(|| path.file_stem().and_then(|s| s.to_str()).unwrap_or_default().to_string());
+    let mut body = json!({"name": name, "mimeType": "application/vnd.google-apps.spreadsheet"});
+    if let Some(parent) = parent {
+        if let Some(obj) = body.as_object_mut() {
+            obj.insert("parents".to_string(), json!([parse_ref(&parent)?.id]));
+        }
+    }
+    let f = api
+        .drive_files_create_media(&body, mime, std::fs::read(&path)?, "id,name,mimeType,webViewLink")
+        .await?;
+    Ok(json!({
+        "id": field(&f, "id")?,
+        "name": field(&f, "name")?,
+        "mime_type": field(&f, "mimeType")?,
+        "url": optional(&f, "webViewLink"),
+    })
+    .into())
+}
+
 async fn move_file(api: &dyn GoogleApi, args: &Args) -> Result<ToolOutput> {
     let item = args.req_str("item")?;
     let parent = args.req_str("parent")?;
@@ -353,6 +392,21 @@ pub fn defs() -> Vec<ToolDef> {
             }),
         ),
         ToolDef::new(
+            "import_excel_as_sheet",
+            "Upload an Excel file (.xlsx or .xls) and convert it to a native Google Sheet.\n\n\
+             `source_path` must be inside the sandbox files dir. `name` defaults to the file name \
+             without\nits extension. Always creates a new spreadsheet; it never replaces an \
+             existing file.",
+            json!({
+                "properties": {
+                    "source_path": {"type": "string"},
+                    "name": {"type": "string"},
+                    "parent": {"type": "string"},
+                },
+                "required": ["source_path"],
+            }),
+        ),
+        ToolDef::new(
             "move_file",
             "Move a file (item) into a different folder (parent). Requires confirm=true.",
             json!({
@@ -399,6 +453,7 @@ pub async fn dispatch(name: &str, api: &dyn GoogleApi, args: &Args) -> Option<Re
         "read_file_as_text" => read_file_as_text(api, args).await,
         "download_file" => download_file(api, args).await,
         "upload_file" => upload_file(api, args).await,
+        "import_excel_as_sheet" => import_excel_as_sheet(api, args).await,
         "move_file" => move_file(api, args).await,
         "rename_file" => rename_file(api, args).await,
         "export_file" => export_file(api, args).await,
@@ -528,7 +583,15 @@ mod tests {
         let names: Vec<&str> = defs().iter().map(|d| d.name).collect();
         assert_eq!(
             names,
-            ["read_file_as_text", "download_file", "upload_file", "move_file", "rename_file", "export_file"]
+            [
+                "read_file_as_text",
+                "download_file",
+                "upload_file",
+                "import_excel_as_sheet",
+                "move_file",
+                "rename_file",
+                "export_file"
+            ]
         );
     }
 
@@ -910,6 +973,78 @@ mod tests {
         let api = FakeApi::new();
         let message = err(&api, "upload_file", json!({"name": "x", "source_path": "nope.bin"})).await;
         assert!(message.starts_with("source_path not found in files dir: "), "{message}");
+    }
+
+    // ---- import_excel_as_sheet -----------------------------------------------------------
+
+    const XLSX_MIME: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    const SHEET_MIME: &str = "application/vnd.google-apps.spreadsheet";
+
+    fn converted() -> Value {
+        json!({"id": "S", "name": "Q3", "mimeType": SHEET_MIME, "webViewLink": "u"})
+    }
+
+    #[tokio::test]
+    async fn an_excel_import_asks_drive_to_convert_to_a_native_sheet() {
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let sandbox = Sandbox::new();
+        std::fs::create_dir_all(&sandbox.root).unwrap();
+        std::fs::write(sandbox.path("Q3.xlsx"), b"PK").unwrap();
+        let api = FakeApi::new();
+        api.on("drive_files_create_media", converted());
+        let out = ok(&api, "import_excel_as_sheet", json!({"source_path": "Q3.xlsx"})).await;
+        let call = api.last("drive_files_create_media");
+        // The target mimeType in the metadata is what triggers conversion; without it Drive
+        // stores the workbook as an opaque .xlsx.
+        assert_eq!(call["metadata"], json!({"name": "Q3", "mimeType": SHEET_MIME}));
+        assert_eq!(call["mime_type"], XLSX_MIME);
+        assert_eq!(call["bytes"], 2);
+        assert_eq!(call["fields"], "id,name,mimeType,webViewLink");
+        assert_eq!(out, json!({"id": "S", "name": "Q3", "mime_type": SHEET_MIME, "url": "u"}));
+    }
+
+    #[tokio::test]
+    async fn an_excel_import_honours_name_parent_and_the_legacy_xls_type() {
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let sandbox = Sandbox::new();
+        std::fs::create_dir_all(&sandbox.root).unwrap();
+        std::fs::write(sandbox.path("old.XLS"), b"\xd0\xcf").unwrap();
+        let api = FakeApi::new();
+        api.on("drive_files_create_media", converted());
+        ok(
+            &api,
+            "import_excel_as_sheet",
+            json!({"source_path": "old.XLS", "name": "Budget", "parent": A_FOLDER_ID}),
+        )
+        .await;
+        let call = api.last("drive_files_create_media");
+        assert_eq!(
+            call["metadata"],
+            json!({"name": "Budget", "mimeType": SHEET_MIME, "parents": [A_FOLDER_ID]})
+        );
+        assert_eq!(call["mime_type"], "application/vnd.ms-excel");
+    }
+
+    #[tokio::test]
+    async fn an_excel_import_refuses_a_non_excel_file_before_any_drive_call() {
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let sandbox = Sandbox::new();
+        std::fs::create_dir_all(&sandbox.root).unwrap();
+        std::fs::write(sandbox.path("notes.csv"), b"a,b").unwrap();
+        let api = FakeApi::new();
+        let message = err(&api, "import_excel_as_sheet", json!({"source_path": "notes.csv"})).await;
+        assert_eq!(message, "notes.csv is not an Excel file; expected .xlsx or .xls");
+        assert!(api.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_excel_import_source_escaping_the_sandbox_is_rejected() {
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _sandbox = Sandbox::new();
+        let api = FakeApi::new();
+        let message = err(&api, "import_excel_as_sheet", json!({"source_path": "../../secret.xlsx"})).await;
+        assert!(message.contains("must be inside the files dir"), "{message}");
+        assert!(api.calls().is_empty());
     }
 
     // ---- export_file ---------------------------------------------------------------------

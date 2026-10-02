@@ -34,6 +34,12 @@ _EXPORT_MIME = {
     "html": "text/html",
 }
 
+# Excel formats Drive can convert on import, keyed by lowercase file extension.
+_EXCEL_MIME = {
+    ".xlsx": _EXPORT_MIME["xlsx"],
+    ".xls": "application/vnd.ms-excel",
+}
+
 _GOOGLE_EXPORT_TEXT = {
     "application/vnd.google-apps.document": "text/plain",
     "application/vnd.google-apps.spreadsheet": "text/csv",
@@ -142,6 +148,32 @@ def upload_file(
 
 
 @api_errors
+def import_excel_as_sheet(source_path: str, name: str | None = None, parent: str | None = None) -> dict:
+    """Upload an Excel file (.xlsx or .xls) and convert it to a native Google Sheet.
+
+    `source_path` must be inside the sandbox files dir. `name` defaults to the file name without
+    its extension. Always creates a new spreadsheet; it never replaces an existing file.
+    """
+    path = safe_read_path(source_path)
+    mime = _EXCEL_MIME.get(path.suffix.lower())
+    if not mime:
+        raise RuntimeError(f"{path.name} is not an Excel file; expected .xlsx or .xls")
+    # Setting the target mimeType in the metadata is what makes Drive convert the upload rather
+    # than store the .xlsx as an opaque file.
+    body: dict = {"name": name or path.stem, "mimeType": "application/vnd.google-apps.spreadsheet"}
+    if parent:
+        body["parents"] = [parse_ref(parent).id]
+    media = MediaFileUpload(str(path), mimetype=mime, resumable=False)
+    f = (
+        drive()
+        .files()
+        .create(body=body, media_body=media, fields="id,name,mimeType,webViewLink", supportsAllDrives=True)
+        .execute()
+    )
+    return {"id": f["id"], "name": f["name"], "mime_type": f["mimeType"], "url": f.get("webViewLink")}
+
+
+@api_errors
 def move_file(item: str, parent: str, confirm: bool = False) -> dict:
     """Move a file (item) into a different folder (parent). Requires confirm=true."""
     ref = parse_ref(item)
@@ -199,6 +231,7 @@ _TOOLS = (
     read_file_as_text,
     download_file,
     upload_file,
+    import_excel_as_sheet,
     move_file,
     rename_file,
     export_file,

@@ -12,7 +12,7 @@ A read/write MCP for Google Drive, Docs, Sheets & Calendar that fixes what trips
 >
 > **Formatted writes (opt-in):** `append_text`/`insert_text`/`create_document` accept `markdown=true`, rendering a small dialect — `#`…`######` headings, `-`/`*` bullets, `1.` numbered lists (nest with two spaces or a tab per level), `**bold**`, `*italic*`, `<u>underline</u>`, and **GFM pipe tables** (a header row immediately followed by a `| --- | --- |` delimiter row — a lone `| a | b |` line with no delimiter stays literal text). The only escape is `\|` for a literal pipe **inside a table cell**; otherwise text that looks like markup gets styled (leave `markdown` unset to store text verbatim). Table round-trip preserves structure and plain cell text — cell emphasis and multi-paragraph cells are not preserved on read. In Sheets, `format_cells` sets bold/italic/underline on a cell range without touching values.
 >
-> **Local-file sandbox:** all local file I/O is confined to `GDRIVE_MCP_FILES_DIR` (default a private `0700` dir under the config dir) — `download_file`/`export_file`/`read_full_sheet` write there (relative `dest_path`; absolute paths and `..` rejected, files `0600`), and `upload_file(source_path)` reads only from there. This stops a prompt-injected agent from writing to `~/.ssh` or exfiltrating arbitrary local files to Drive. Fetched Doc images are pulled only from Google hosts (the OAuth token is never sent elsewhere).
+> **Local-file sandbox:** all local file I/O is confined to `GDRIVE_MCP_FILES_DIR` (default a private `0700` dir under the config dir) — `download_file`/`export_file`/`read_full_sheet` write there (relative `dest_path`; absolute paths and `..` rejected, files `0600`), and `upload_file(source_path)` / `import_excel_as_sheet(source_path)` read only from there. This stops a prompt-injected agent from writing to `~/.ssh` or exfiltrating arbitrary local files to Drive. Fetched Doc images are pulled only from Google hosts (the OAuth token is never sent elsewhere).
 >
 > **Spilled-file retention + audit:** files spilled to the sandbox are swept on server start once older than `GDRIVE_MCP_FILES_TTL_HOURS` (default 24; `0` disables) — for a long-lived server, restart to dispose, or lower the TTL. The sweep is ownership-gated: it only runs in a sandbox gdrive-mcp itself created (tracked by a `.gdrive-mcp-sandbox` marker file), so pointing `GDRIVE_MCP_FILES_DIR` at a pre-existing directory never deletes the files already there — a startup warning notes the skipped sweep, and creating the marker file yourself opts the directory in. Every tool call is appended to an audit log (`GDRIVE_MCP_AUDIT_LOG`, default `audit.log` in the config dir) recording user, tool, target id, and outcome — **never** the content read or written.
 >
@@ -65,6 +65,7 @@ Calendar writes default to `send_updates=none`; callers must explicitly select `
 - **`read_file_as_text`** — a file's content as text in bounded chunks (Google-native exported; PDFs text-extracted).
 - **`download_file`** — download a binary file (base64 if small, else written to disk).
 - **`upload_file`**ᶜ — create a new file, or replace an existing file's content (replace is gated).
+- **`import_excel_as_sheet`** — upload an Excel file (`.xlsx` / `.xls`) from the sandbox and convert it to a native Google Sheet (always a new file).
 - **`move_file`**ᶜ — move a file into a `parent` folder.
 - **`rename_file`**ᶜ — rename a file.
 - **`export_file`** — export a Google-native file to pdf / docx / xlsx / pptx / csv / txt / md / html.
@@ -110,7 +111,7 @@ claude mcp add gdrive -- uv run --directory /path/to/gdrive-mcp gdrive-mcp serve
 
 ## Rust implementation (`rust/`)
 
-`rust/` holds a second, self-contained implementation of the same server — same 37 tools, same
+`rust/` holds a second, self-contained implementation of the same server — same 38 tools, same
 argument names, same result shapes, same confirm/dry-run/locator/gate semantics — as a single
 static binary with no Python runtime. The two are interchangeable: they read the **same**
 `~/.config/gdrive-mcp/oauth_client.json` and write the **same** `token.json` (byte-compatible with

@@ -21,7 +21,7 @@ There are two implementations of the same MCP server, and they are meant to be i
 | | Source | Tests | Status |
 |---|---|---|---|
 | **Python** | `src/gdrive_mcp/**` | `tests/**` | the behaviour of record |
-| **Rust** | `rust/src/**` | `rust/src/**` (`mod tests`) + `rust/tests/**` | a port: same 37 tools, same argument names, same result shapes, same confirm / dry-run / locator / gate semantics |
+| **Rust** | `rust/src/**` | `rust/src/**` (`mod tests`) + `rust/tests/**` | a port: same 38 tools, same argument names, same result shapes, same confirm / dry-run / locator / gate semantics |
 
 They read the same OAuth client and write the same token file, so authenticating one authenticates
 the other. That is convenient and it is also a hazard: it means a Rust defect is reachable by
@@ -65,7 +65,7 @@ A plan that pretends it drove the implementation is worth less than one that adm
 |---|---|
 | Rust | `cargo test` on a Unix host: **420 passed, 3 ignored** (409 library tests + 8 server integration tests + 3 credential-free live-harness companions; the 3 ignored are the live harnesses). A few sandbox checks are `#[cfg(unix)]`, so a Windows run counts fewer. `cargo clippy --all-targets` and `cargo fmt --check` clean. |
 | Python | `uv run pytest -q`: **249 passed, 11 skipped** (the skipped tests are the live locator and Calendar harnesses, latched off). |
-| Cross-implementation | `scripts/diff_tool_surface.py`: green at **37/37** tools. |
+| Cross-implementation | `scripts/diff_tool_surface.py`: green at **38/38** tools. |
 | Live credentialed | Docs `L1`–`L10`: Python 2026-08-06 (10 passed); Rust 2026-08-07 (10 passed, 11.6 s). Sheets `S1`–`S11`: Rust 2026-08-07 (11 passed, 15.3 s); **Python has never had a Sheets live run.** Calendar `C1`–`C12`: Python 2026-09-08 (2 tests passed, 9.48 s); Rust 2026-09-08 (1 live test passed, 7.08 s). |
 
 ---
@@ -413,9 +413,9 @@ Rust names relative to `tools::sheets::tests::`, Python to `test_tools_unit.py::
 doubles the apostrophe, and then the client percent-encodes each `'` into `%27`. Live check `S9` is
 what establishes that Google accepts the result.
 
-### 4.8 Files — 24 checks
+### 4.8 Files — 29 checks
 
-`read_file_as_text`, `download_file`, `upload_file`, `move_file`, `rename_file`, `export_file`.
+`read_file_as_text`, `download_file`, `upload_file`, `import_excel_as_sheet`, `move_file`, `rename_file`, `export_file`.
 These can replace a file's bytes, re-parent it, rename it — and they are the tools that touch the
 **local** filesystem. Rust names relative to `tools::files::tests::`.
 
@@ -446,6 +446,10 @@ These can replace a file's bytes, re-parent it, rename it — and they are the t
 | FIL-23 | An upload guesses its mime type from the filename, matching what `MediaFileUpload`'s `mimetypes.guess_type` did — uploading a `.pdf` as `octet-stream` would store the wrong type in Drive | `an_upload_guesses_its_mime_type_from_the_filename` | — |
 | FIL-24 | Sandbox containment is enforced at **every** local-I/O site, and for uploads it is enforced *before* any Drive call (a missing file inside the sandbox likewise) | `an_upload_source_path_escaping_the_sandbox_is_rejected_before_any_drive_call`, `a_source_path_inside_the_sandbox_that_does_not_exist_says_so`, `a_download_dest_path_escaping_the_sandbox_is_rejected`, `an_export_dest_path_escaping_the_sandbox_is_rejected`, plus `SHT-37` for the CSV | — |
 | FIL-25 | A corrupt or encrypted PDF is reported as `could not extract text from PDF: …` rather than leaking a raw pypdf exception type the agent cannot act on (§7.7) | `an_unreadable_pdf_reports_an_error_instead_of_escaping` | `test_read_file_as_text_curates_a_corrupt_pdf_instead_of_leaking_pypdf` |
+| FIL-26 | `import_excel_as_sheet` sets the **target** `mimeType` to `application/vnd.google-apps.spreadsheet` in the create metadata (that is what makes Drive convert rather than store an opaque `.xlsx`), uploads the bytes as the Excel type, defaults `name` to the filename stem, and returns the converted `mime_type` | `an_excel_import_asks_drive_to_convert_to_a_native_sheet` | `test_import_excel_asks_drive_to_convert_to_a_native_sheet` |
+| FIL-27 | `name` and `parent` are honoured, and a (case-insensitive) legacy `.xls` is sent as `application/vnd.ms-excel` | `an_excel_import_honours_name_parent_and_the_legacy_xls_type` | `test_import_excel_honours_name_parent_and_the_legacy_xls_type` |
+| FIL-28 | A non-Excel extension is refused (`<file> is not an Excel file; expected .xlsx or .xls`) before any Drive call | `an_excel_import_refuses_a_non_excel_file_before_any_drive_call` | `test_import_excel_refuses_a_non_excel_file_before_any_drive_call` |
+| FIL-29 | A `source_path` escaping the sandbox is rejected before any Drive call | `an_excel_import_source_escaping_the_sandbox_is_rejected` | `test_import_excel_source_escaping_the_sandbox_is_rejected` |
 
 **Asymmetry.** `read_file_as_text`, `download_file`, `export_file` and `create_spreadsheet` /
 `add_tab` (`SHT-46`/`47`) have **no Python tool-level tests at all**, and `upload_file` has one — the
@@ -531,7 +535,7 @@ What the MCP client is actually told, and what happens to the arguments it sends
 
 | # | Claim | Rust | Python |
 |---|---|---|---|
-| SRF-1 | All **37** tools register, with unique names and non-empty descriptions | `server_integration.rs::every_tool_is_registered_with_the_right_annotations` (asserts `tools.len() == 37`), `tools::tests::every_tool_forbids_unknown_arguments_and_names_itself` | `test_server_integration.py::test_registered_tools_and_annotations` (`len(by_name) == 37`) |
+| SRF-1 | All **38** tools register, with unique names and non-empty descriptions | `server_integration.rs::every_tool_is_registered_with_the_right_annotations` (asserts `tools.len() == 38`), `tools::tests::every_tool_forbids_unknown_arguments_and_names_itself` | `test_server_integration.py::test_registered_tools_and_annotations` (`len(by_name) == 38`) |
 | SRF-2 | The read-only and destructive sets are the Python sets **verbatim**, are disjoint, and every name in them is actually registered — set membership *is* the contract, since it is what every client is told | `server::tests::the_annotated_sets_are_the_python_sets_verbatim` | `test_registered_tools_and_annotations` (representatives only) |
 | SRF-3 | Read-only tools carry `readOnlyHint` and leave `destructiveHint` **unset** — a read cannot destroy anything, so claiming `false` would be a claim the Python never made; destructive tools carry the inverse triple | `server::tests::every_read_only_tool_is_annotated_as_such`, `every_destructive_tool_carries_the_destructive_hint` | representatives only |
 | SRF-4 | Additive tools are writes but not destructive — and `read_full_sheet` is in that set, **not** in read-only, because it spills a local file | `server::tests::additive_tools_are_writes_but_not_destructive` | — |
@@ -541,7 +545,7 @@ What the MCP client is actually told, and what happens to the arguments it sends
 | SRF-8 | An unknown argument is **rejected**, not dropped, on the registered path | `server_integration.rs::an_unknown_argument_is_rejected_rather_than_dropped`, `args::tests::unknown_arguments_are_rejected_rather_than_dropped` | `test_unknown_kwarg_rejected_on_registered_path`, `test_unknown_kwarg_rejected_on_new_tools` |
 | SRF-9 | Argument coercion reproduces **both** of FastMCP's layers, not just the strict one: a list sent as a JSON string is re-parsed, a boolean sent as `"true"` is coerced, an integral float counts as an integer, an explicit `null` reads as the documented default — while a word that is not a boolean is still rejected, a string that merely looks numeric is left alone, wrong types are reported with the argument name, missing required arguments say so, and `rows` must be a list of lists | `args::tests::a_list_argument_sent_as_a_json_string_is_re_parsed`, `booleans_and_integers_accept_the_spellings_pydantic_coerced`, `integral_floats_count_as_integers`, `explicit_null_reads_as_the_documented_default`, `a_word_that_is_not_a_boolean_is_still_rejected`, `a_string_that_merely_looks_numeric_is_left_alone`, `wrong_types_are_reported_with_the_argument_name`, `missing_required_arguments_say_so`, `rows_must_be_a_list_of_lists` | n/a — pydantic's own behaviour, which the Rust tests encode |
 | SRF-10 | Tools are declared in the order the Python modules registered them, and each module's dispatch ignores names it does not own | `tools::{discovery,docs,sheets,files,calendar}::tests::*declared*order*` and each module's unrelated-name dispatch test | n/a |
-| SRF-11 | **Cross-language surface parity**: identical names, descriptions, argument names, argument **order**, required sets and defaults, and a schema that forbids unknown arguments | `scripts/diff_tool_surface.py` — reads the Python signatures and docstrings out of the AST (no import, no credentials), starts the Rust binary, asks it for `tools/list` over stdio, and diffs. Exits non-zero on any mismatch. **Green at 37/37.** | same script |
+| SRF-11 | **Cross-language surface parity**: identical names, descriptions, argument names, argument **order**, required sets and defaults, and a schema that forbids unknown arguments | `scripts/diff_tool_surface.py` — reads the Python signatures and docstrings out of the AST (no import, no credentials), starts the Rust binary, asks it for `tools/list` over stdio, and diffs. Exits non-zero on any mismatch. **Green at 38/38.** | same script |
 | SRF-12 | An impact preview names the action and never claims success | `guard::tests::a_preview_names_the_action_and_never_claims_success` | `test_guard.py::test_preview_shape` |
 | SRF-13 | The locator edit tools are registered destructive, and the insert tools expose their locator parameters | see `LOC-36` | see `LOC-36` |
 
@@ -924,6 +928,11 @@ prove resolve→write is atomic. The window between the resolving `get` and the 
 `requiredRevisionId` converts it from silent corruption into a loud failure — that is the designed
 guarantee, and nothing stronger.
 
+**`import_excel_as_sheet` has not been run against Google.** `FIL-26`–`FIL-29` prove the request we
+build (target `mimeType` set, Excel source type, sandbox containment) against a stub. That Drive
+actually converts the workbook, and what it does with formulas, formatting or multiple sheets, is
+unverified until a live run.
+
 **The Sheets read→write window is unguarded, and that is not fixable with the current API.** Per §6
 finding 6, Sheets offers no `writeControl` equivalent. Consequently:
 
@@ -1038,7 +1047,7 @@ cargo fmt --check --manifest-path rust/Cargo.toml
 
 # Cross-implementation surface parity (SRF-11)
 cargo build --release --manifest-path rust/Cargo.toml
-python3 scripts/diff_tool_surface.py               # tool surfaces match: 37 tools
+python3 scripts/diff_tool_surface.py               # tool surfaces match: 38 tools
 
 # Live, credentialed. Writes disposable resources to the authenticated account. Never run in CI.
 GDRIVE_MCP_LIVE=1 uv run pytest tests/test_live_locator.py -v
@@ -1075,7 +1084,7 @@ Checked where a test or a recorded run backs the box. Unchecked where work is ge
 - [x] `uv run pytest -q` green — 249 passed, 11 skipped
 - [x] `cargo test --manifest-path rust/Cargo.toml` green — 420 passed, 3 ignored
 - [x] `cargo clippy --all-targets` and `cargo fmt --check` clean
-- [x] `scripts/diff_tool_surface.py` green at 37/37 against a release binary
+- [x] `scripts/diff_tool_surface.py` green at 38/38 against a release binary
 
 **Live runs**
 

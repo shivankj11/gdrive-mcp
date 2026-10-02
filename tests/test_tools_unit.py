@@ -1195,3 +1195,61 @@ def test_export_file_spills_a_large_export_under_the_file_id(monkeypatch, tmp_pa
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+# ---- import_excel_as_sheet -----------------------------------------------------------
+
+_XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def _import_svc():
+    svc = MagicMock()
+    svc.files.return_value.create.return_value.execute.return_value = {
+        "id": "S", "name": "Q3", "mimeType": "application/vnd.google-apps.spreadsheet", "webViewLink": "u",
+    }
+    return svc
+
+
+def test_import_excel_asks_drive_to_convert_to_a_native_sheet(monkeypatch, tmp_path):
+    (tmp_path / "Q3.xlsx").write_bytes(b"PK")
+    svc = _import_svc()
+    monkeypatch.setattr(files_mod, "drive", lambda: svc)
+    monkeypatch.setenv("GDRIVE_MCP_FILES_DIR", str(tmp_path))
+    out = files_mod.import_excel_as_sheet("Q3.xlsx")
+    kwargs = svc.files.return_value.create.call_args.kwargs
+    # The target mimeType in the metadata is what triggers conversion; without it Drive stores
+    # the workbook as an opaque .xlsx.
+    assert kwargs["body"] == {"name": "Q3", "mimeType": "application/vnd.google-apps.spreadsheet"}
+    assert kwargs["media_body"].mimetype() == _XLSX_MIME
+    assert kwargs["supportsAllDrives"] is True
+    assert out == {"id": "S", "name": "Q3", "mime_type": "application/vnd.google-apps.spreadsheet", "url": "u"}
+
+
+def test_import_excel_honours_name_parent_and_the_legacy_xls_type(monkeypatch, tmp_path):
+    (tmp_path / "old.XLS").write_bytes(b"\xd0\xcf")
+    svc = _import_svc()
+    monkeypatch.setattr(files_mod, "drive", lambda: svc)
+    monkeypatch.setenv("GDRIVE_MCP_FILES_DIR", str(tmp_path))
+    files_mod.import_excel_as_sheet("old.XLS", name="Budget", parent="B" * 30)
+    kwargs = svc.files.return_value.create.call_args.kwargs
+    assert kwargs["body"]["name"] == "Budget" and kwargs["body"]["parents"] == ["B" * 30]
+    assert kwargs["media_body"].mimetype() == "application/vnd.ms-excel"
+
+
+def test_import_excel_refuses_a_non_excel_file_before_any_drive_call(monkeypatch, tmp_path):
+    (tmp_path / "notes.csv").write_text("a,b")
+    svc = _import_svc()
+    monkeypatch.setattr(files_mod, "drive", lambda: svc)
+    monkeypatch.setenv("GDRIVE_MCP_FILES_DIR", str(tmp_path))
+    with pytest.raises(RuntimeError, match="notes.csv is not an Excel file; expected .xlsx or .xls"):
+        files_mod.import_excel_as_sheet("notes.csv")
+    assert not svc.files.return_value.create.called
+
+
+def test_import_excel_source_escaping_the_sandbox_is_rejected(monkeypatch, tmp_path):
+    svc = _import_svc()
+    monkeypatch.setattr(files_mod, "drive", lambda: svc)
+    monkeypatch.setenv("GDRIVE_MCP_FILES_DIR", str(tmp_path))
+    with pytest.raises(RuntimeError, match="must be inside the files dir"):
+        files_mod.import_excel_as_sheet("../../secret.xlsx")
+    assert not svc.files.return_value.create.called
