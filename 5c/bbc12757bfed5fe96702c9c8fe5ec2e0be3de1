@@ -1,0 +1,33 @@
+README.md
+  s_730147d390e042::t_222ec197db2bcf 15,68,114
+VERIFICATION.md
+  s_730147d390e042::t_3e2a111fa75fc6 24,68,416,418,449-452,538,548,931-935,1050,1087
+rust/src/tools/files.rs
+  s_730147d390e042::t_1168365a9bbfe6 38-43,237-269,394-408,456,586-594,978-1049
+rust/src/tools/mod.rs
+  s_730147d390e042::t_d9ab04c8ffff5a 455
+rust/tests/server_integration.rs
+  s_730147d390e042::t_c415b6aab59d7c 291
+src/gdrive_mcp/tools/files.py
+  s_730147d390e042::t_3a1df9156368d4 37-42,150-175,234
+tests/test_server_integration.py
+  s_730147d390e042::t_d928be0245edc1 45,52
+tests/test_tools_unit.py
+  s_730147d390e042::t_517d0530e8479d 1198-1255
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "5cbbc12757bfed5fe96702c9c8fe5ec2e0be3de1",
+  "prompts": {},
+  "sessions": {
+    "s_730147d390e042": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "17a44f8a-360b-435e-a561-7c41f4fd7172",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Shivank Joshi <89424061+shivankj11@users.noreply.github.com>"
+    }
+  }
+}
