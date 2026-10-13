@@ -1,0 +1,49 @@
+README.md
+  s_8e3aadedab0be6::t_988816a8f7d92c 3,5,7,52-65,106,128
+VERIFICATION.md
+  s_8e3aadedab0be6::t_a2280112b54e38 24,66-68,83,538,548,586-619,638-639,643-644,788-815,858-897,1035-1041,1161,1195-1196,1198
+rust/src/args.rs
+  s_8e3aadedab0be6::t_c0fbe95edd7e99 159-162
+rust/src/clients.rs
+  s_8e3aadedab0be6::t_44a3605fdc5f69 4,22,125-133,457-467,734-768,1014-1022
+rust/src/server.rs
+  s_8e3aadedab0be6::t_b3d7d866aa5f95 36,53-57,260,275-279
+rust/src/tools/mod.rs
+  s_8e3aadedab0be6::t_55ebb91093892a 13,86,107-109,314-328,475,531-538,553-557
+rust/src/tools/slides.rs
+  s_8e3aadedab0be6::t_bad4edab82dd1a 1-2000
+rust/tests/server_integration.rs
+  s_8e3aadedab0be6::t_b5bdfecc18910d 95-106,303,314-327
+scripts/diff_tool_surface.py
+  s_8e3aadedab0be6::t_f9896265fa0eba 29
+src/gdrive_mcp/clients.py
+  s_8e3aadedab0be6::t_dc686d8e3c8992 37-43
+src/gdrive_mcp/server.py
+  s_8e3aadedab0be6::t_7cf1838ca9d354 11,17,25,45
+src/gdrive_mcp/tools/__init__.py
+  s_8e3aadedab0be6::t_7c69df87d3d1f2 3,5
+src/gdrive_mcp/tools/slides.py
+  s_8e3aadedab0be6::t_b3b83e353530b3 1-695
+tests/test_live_slides.py
+  s_8e3aadedab0be6::t_987323d3c22f93 1-169
+tests/test_server_integration.py
+  s_8e3aadedab0be6::t_2b100a80891a1d 45,58-64
+tests/test_slides.py
+  s_8e3aadedab0be6::t_cd8505c841a72f 1-458
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "26ea3a9ef712090caa9748512edd2290172c6414",
+  "prompts": {},
+  "sessions": {
+    "s_8e3aadedab0be6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2b3d79b5-c0e9-4cff-83d9-69c26407af2f",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Shivank Joshi <89424061+shivankj11@users.noreply.github.com>"
+    }
+  }
+}
