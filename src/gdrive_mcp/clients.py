@@ -35,6 +35,13 @@ def docs():
 
 
 @lru_cache(maxsize=1)
+def slides():
+    # Fetch the live discovery document: the copy bundled with the client predates the comment
+    # requests and presentations.get's `commentsViewMode`, and rejects both.
+    return build("slides", "v1", credentials=_creds(), cache_discovery=False, static_discovery=False)
+
+
+@lru_cache(maxsize=1)
 def calendar():
     return build("calendar", "v3", credentials=_creds(), cache_discovery=False)
 

@@ -92,6 +92,18 @@ impl GoogleApi for OfflineApi {
     async fn docs_batch_update(&self, _: &str, _: &Value) -> ToolResult<Value> {
         offline!()
     }
+    async fn slides_get(&self, _: &str, _: bool) -> ToolResult<Value> {
+        offline!()
+    }
+    async fn slides_create(&self, _: &str) -> ToolResult<Value> {
+        offline!()
+    }
+    async fn slides_batch_update(&self, _: &str, _: &Value) -> ToolResult<Value> {
+        offline!()
+    }
+    async fn slides_page_get(&self, _: &str, _: &str) -> ToolResult<Value> {
+        offline!()
+    }
     async fn sheets_get(&self, _: &str, _: &str) -> ToolResult<Value> {
         offline!()
     }
@@ -288,7 +300,7 @@ const AN_ID: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 #[tokio::test]
 async fn every_tool_is_registered_with_the_right_annotations() {
     let tools = list_tools().await;
-    assert_eq!(tools.len(), 38);
+    assert_eq!(tools.len(), 48);
     assert_eq!(find(&tools, "read_sheet").annotations.as_ref().unwrap().read_only_hint, Some(true));
     assert_eq!(find(&tools, "delete_rows").annotations.as_ref().unwrap().destructive_hint, Some(true));
     for additive in ["append_text", "create_document", "insert_table"] {
@@ -299,6 +311,20 @@ async fn every_tool_is_registered_with_the_right_annotations() {
         );
     }
     assert_eq!(find(&tools, "format_cells").annotations.as_ref().unwrap().read_only_hint, Some(false));
+    assert_eq!(find(&tools, "read_presentation").annotations.as_ref().unwrap().read_only_hint, Some(true));
+    // Additive or content-preserving: nothing is lost, so no destructive hint.
+    for name in ["create_presentation", "add_slide", "duplicate_slide", "move_slide"] {
+        let a = find(&tools, name).annotations.as_ref().unwrap();
+        assert_eq!(a.read_only_hint, Some(false), "{name}");
+        assert_eq!(a.destructive_hint, Some(false), "{name}");
+    }
+    for name in
+        ["delete_slide", "replace_slide_text", "set_shape_text", "set_speaker_notes", "add_slide_comment"]
+    {
+        let a = find(&tools, name).annotations.as_ref().unwrap();
+        assert_eq!(a.read_only_hint, Some(false), "{name}");
+        assert_eq!(a.destructive_hint, Some(true), "{name}");
+    }
 }
 
 #[tokio::test]

@@ -21,7 +21,7 @@ There are two implementations of the same MCP server, and they are meant to be i
 | | Source | Tests | Status |
 |---|---|---|---|
 | **Python** | `src/gdrive_mcp/**` | `tests/**` | the behaviour of record |
-| **Rust** | `rust/src/**` | `rust/src/**` (`mod tests`) + `rust/tests/**` | a port: same 38 tools, same argument names, same result shapes, same confirm / dry-run / locator / gate semantics |
+| **Rust** | `rust/src/**` | `rust/src/**` (`mod tests`) + `rust/tests/**` | a port: same 48 tools, same argument names, same result shapes, same confirm / dry-run / locator / gate semantics |
 
 They read the same OAuth client and write the same token file, so authenticating one authenticates
 the other. That is convenient and it is also a hazard: it means a Rust defect is reachable by
@@ -63,9 +63,9 @@ A plan that pretends it drove the implementation is worth less than one that adm
 
 | | Measured |
 |---|---|
-| Rust | `cargo test` on a Unix host: **420 passed, 3 ignored** (409 library tests + 8 server integration tests + 3 credential-free live-harness companions; the 3 ignored are the live harnesses). A few sandbox checks are `#[cfg(unix)]`, so a Windows run counts fewer. `cargo clippy --all-targets` and `cargo fmt --check` clean. |
-| Python | `uv run pytest -q`: **249 passed, 11 skipped** (the skipped tests are the live locator and Calendar harnesses, latched off). |
-| Cross-implementation | `scripts/diff_tool_surface.py`: green at **38/38** tools. |
+| Rust | `cargo test` on a Unix host: **467 passed, 3 ignored** (455 library tests + 9 server integration tests + 3 credential-free live-harness companions; the 3 ignored are the live harnesses). A few sandbox checks are `#[cfg(unix)]`, so a Windows run counts fewer. `cargo clippy --all-targets` and `cargo fmt --check` clean. |
+| Python | `uv run pytest -q`: **301 passed, 12 skipped** (the skipped tests are the live locator, Calendar and Slides harnesses, latched off). |
+| Cross-implementation | `scripts/diff_tool_surface.py`: green at **48/48** tools. |
 | Live credentialed | Docs `L1`–`L10`: Python 2026-08-06 (10 passed); Rust 2026-08-07 (10 passed, 11.6 s). Sheets `S1`–`S11`: Rust 2026-08-07 (11 passed, 15.3 s); **Python has never had a Sheets live run.** Calendar `C1`–`C12`: Python 2026-09-08 (2 tests passed, 9.48 s); Rust 2026-09-08 (1 live test passed, 7.08 s). |
 
 ---
@@ -80,7 +80,7 @@ listed with the sections that discharge them.
 |---|---|---|
 | **Consistent target arguments** | Drive/Docs/Sheets tools take their target as `item`, a URL or bare id parsed by one resolver. Calendar uses explicit `calendar_id` and `event_id`, matching Google's two-part resource identity. | `DSC-1`–`DSC-6`, `CAL-2`–`CAL-6` |
 | **The confirm gate** | The tools that can destroy data return `status: "confirmation_required"` plus an impact summary instead of writing, unless called with `confirm=true`. Additive tools are deliberately *not* gated. | `LOC-17`–`LOC-19`, `SHT-14`/`20`/`21`/`23`, `FIL-1`–`FIL-6`, `SRF-2`–`SRF-5` |
-| **Dry-run predicts without writing** | Fourteen edit tools accept `dry_run=true` and return a predicted before/after with no API mutation. Dry-run is the *explore* affordance; confirm is the *gate*. Both exist, and a dry run must not present itself as a confirmation prompt. | `DW-1`, `LOC-20`, `TBL-7`/`18`, `SHT-38`–`41`/`45`, `CAL-8`/`12`/`15`/`17`, `SRF-5` |
+| **Dry-run predicts without writing** | Twenty-two edit tools accept `dry_run=true` and return a predicted before/after with no API mutation. Dry-run is the *explore* affordance; confirm is the *gate*. Both exist, and a dry run must not present itself as a confirmation prompt. | `DW-1`, `LOC-20`, `TBL-7`/`18`, `SHT-38`–`41`/`45`, `CAL-8`/`12`/`15`/`17`, `SLD-5`/`9`/`11`/`12`/`14`/`17`, `SRF-5` |
 | **Calendar writes do not surprise attendees** | Every Calendar mutation defaults to `send_updates=none`; notification-bearing values are explicit and validated. Caller-supplied event ids make creates safely retryable. | `CAL-8`–`CAL-18` |
 | **Calendar writes reject stale previews** | Update, delete and RSVP read an ETag and send it as `If-Match`; HTTP 412 becomes a directed re-read-and-retry error. | `CAL-13`, `CAL-16`, `CAL-18`, live `C7` |
 | **Locator, not offset, addressing** | Docs edits locate their target by content (`match`, `section`, `after`, `before`), resolved against the API's own element offsets. Character offsets into `read_document`'s output are *not* valid Docs indexes — that output is rendered markdown, and Docs indexes are UTF-16 code units. | `LOC-1`–`LOC-16`, `LOC-30`–`LOC-36` |
@@ -535,7 +535,7 @@ What the MCP client is actually told, and what happens to the arguments it sends
 
 | # | Claim | Rust | Python |
 |---|---|---|---|
-| SRF-1 | All **38** tools register, with unique names and non-empty descriptions | `server_integration.rs::every_tool_is_registered_with_the_right_annotations` (asserts `tools.len() == 38`), `tools::tests::every_tool_forbids_unknown_arguments_and_names_itself` | `test_server_integration.py::test_registered_tools_and_annotations` (`len(by_name) == 38`) |
+| SRF-1 | All **48** tools register, with unique names and non-empty descriptions | `server_integration.rs::every_tool_is_registered_with_the_right_annotations` (asserts `tools.len() == 48`), `tools::tests::every_tool_forbids_unknown_arguments_and_names_itself` | `test_server_integration.py::test_registered_tools_and_annotations` (`len(by_name) == 48`) |
 | SRF-2 | The read-only and destructive sets are the Python sets **verbatim**, are disjoint, and every name in them is actually registered — set membership *is* the contract, since it is what every client is told | `server::tests::the_annotated_sets_are_the_python_sets_verbatim` | `test_registered_tools_and_annotations` (representatives only) |
 | SRF-3 | Read-only tools carry `readOnlyHint` and leave `destructiveHint` **unset** — a read cannot destroy anything, so claiming `false` would be a claim the Python never made; destructive tools carry the inverse triple | `server::tests::every_read_only_tool_is_annotated_as_such`, `every_destructive_tool_carries_the_destructive_hint` | representatives only |
 | SRF-4 | Additive tools are writes but not destructive — and `read_full_sheet` is in that set, **not** in read-only, because it spills a local file | `server::tests::additive_tools_are_writes_but_not_destructive` | — |
@@ -545,7 +545,7 @@ What the MCP client is actually told, and what happens to the arguments it sends
 | SRF-8 | An unknown argument is **rejected**, not dropped, on the registered path | `server_integration.rs::an_unknown_argument_is_rejected_rather_than_dropped`, `args::tests::unknown_arguments_are_rejected_rather_than_dropped` | `test_unknown_kwarg_rejected_on_registered_path`, `test_unknown_kwarg_rejected_on_new_tools` |
 | SRF-9 | Argument coercion reproduces **both** of FastMCP's layers, not just the strict one: a list sent as a JSON string is re-parsed, a boolean sent as `"true"` is coerced, an integral float counts as an integer, an explicit `null` reads as the documented default — while a word that is not a boolean is still rejected, a string that merely looks numeric is left alone, wrong types are reported with the argument name, missing required arguments say so, and `rows` must be a list of lists | `args::tests::a_list_argument_sent_as_a_json_string_is_re_parsed`, `booleans_and_integers_accept_the_spellings_pydantic_coerced`, `integral_floats_count_as_integers`, `explicit_null_reads_as_the_documented_default`, `a_word_that_is_not_a_boolean_is_still_rejected`, `a_string_that_merely_looks_numeric_is_left_alone`, `wrong_types_are_reported_with_the_argument_name`, `missing_required_arguments_say_so`, `rows_must_be_a_list_of_lists` | n/a — pydantic's own behaviour, which the Rust tests encode |
 | SRF-10 | Tools are declared in the order the Python modules registered them, and each module's dispatch ignores names it does not own | `tools::{discovery,docs,sheets,files,calendar}::tests::*declared*order*` and each module's unrelated-name dispatch test | n/a |
-| SRF-11 | **Cross-language surface parity**: identical names, descriptions, argument names, argument **order**, required sets and defaults, and a schema that forbids unknown arguments | `scripts/diff_tool_surface.py` — reads the Python signatures and docstrings out of the AST (no import, no credentials), starts the Rust binary, asks it for `tools/list` over stdio, and diffs. Exits non-zero on any mismatch. **Green at 38/38.** | same script |
+| SRF-11 | **Cross-language surface parity**: identical names, descriptions, argument names, argument **order**, required sets and defaults, and a schema that forbids unknown arguments | `scripts/diff_tool_surface.py` — reads the Python signatures and docstrings out of the AST (no import, no credentials), starts the Rust binary, asks it for `tools/list` over stdio, and diffs. Exits non-zero on any mismatch. **Green at 48/48.** | same script |
 | SRF-12 | An impact preview names the action and never claims success | `guard::tests::a_preview_names_the_action_and_never_claims_success` | `test_guard.py::test_preview_shape` |
 | SRF-13 | The locator edit tools are registered destructive, and the insert tools expose their locator parameters | see `LOC-36` | see `LOC-36` |
 
@@ -583,6 +583,40 @@ that are assembled below the fake seam. All four mutations are confirmation-gate
 | CAL-20 | Calendar ids, summaries, descriptions, locations, attendee addresses and event content cannot enter the content-free audit log | `audit::tests::calendar_content_attendees_and_email_calendar_ids_are_never_recorded` | `test_calendar_content_attendees_and_email_calendar_ids_are_never_logged` |
 | CAL-21 | The hand-built Rust REST queries pin expanded chronological listings, page/search filters, explicit notification policy, and conference-data version | `clients::tests::calendar_queries_pin_expansion_order_paging_notifications_and_conference_version` | discovery client request kwargs are asserted in `tests/test_calendar.py` |
 
+### 4.15 Slides — 18 checks
+
+The Slides tools are new in both languages. Python drives the discovery client through a
+`MagicMock` service (`tests/test_slides.py`); Rust drives the matching `GoogleApi` trait through
+`FakeApi` (`rust/src/tools/slides.rs`, same fixture deck, same test names). Rust tests are in the
+`slides::tests` module. The four content-overwriting tools are confirm-gated, and every writing
+tool except `create_presentation` is dry-runnable.
+
+| # | Claim | Rust | Python |
+|---|---|---|---|
+| SLD-1 | `read_presentation` renders each slide's id and layout, every element's id/type/text (tables cell by cell), speaker notes, an outline, the deck's layouts and `revision_id` | `slides::tests::read_presentation_renders_ids_tables_notes_and_an_outline` | `test_read_presentation_renders_ids_tables_notes_and_an_outline` |
+| SLD-2 | A slide is addressed by object id first, else 1-based number; a single slide can be read; an unknown id or out-of-range number is refused | `read_presentation_single_slide_by_number_or_id`, `unknown_or_out_of_range_slide_is_refused` | `test_read_presentation_single_slide_by_number_or_id`, `test_unknown_or_out_of_range_slide_is_refused` |
+| SLD-3 | `replace_slide_text` counts occurrences per slide across shapes **and table cells** and, without `confirm`, writes nothing | `replace_slide_text_counts_shapes_and_table_cells_per_slide_and_gates` | `test_replace_slide_text_counts_shapes_and_table_cells_per_slide_and_gates` |
+| SLD-4 | `replaceAllText` always names the slide page ids (omitting them also rewrites layouts, masters and notes), pins the read revision, and can be scoped to one slide | `replace_slide_text_names_the_slides_so_layouts_masters_and_notes_are_untouched`, `replace_slide_text_scoped_to_one_slide_sends_only_that_page` | `test_replace_slide_text_names_the_slides_so_layouts_masters_and_notes_are_untouched`, `test_replace_slide_text_scoped_to_one_slide_sends_only_that_page` |
+| SLD-5 | `replace_slide_text` dry-run neither writes nor gates; an unmatched, empty or multi-paragraph `match` raises before any write | `replace_slide_text_dry_run_neither_writes_nor_gates`, `replace_slide_text_unmatched_or_multiparagraph_match_raises_before_writing` | `test_replace_slide_text_dry_run_neither_writes_nor_gates`, `test_replace_slide_text_unmatched_or_multiparagraph_match_raises_before_writing` |
+| SLD-6 | `set_shape_text` overwriting existing text is gated and writes nothing unconfirmed; confirmed, it deletes `ALL` then inserts at 0 | `set_shape_text_overwrite_gates_then_deletes_all_and_inserts` | `test_set_shape_text_overwrite_gates_then_deletes_all_and_inserts` |
+| SLD-7 | On an empty shape no confirm is needed and **no `deleteText` is sent** (Slides rejects it); clearing sends only the delete; identical text is a no-op | `set_shape_text_on_an_empty_shape_needs_no_confirm_and_sends_no_delete`, `set_shape_text_clearing_sends_only_a_delete`, `set_shape_text_same_text_is_a_noop` | `test_set_shape_text_on_an_empty_shape_needs_no_confirm_and_sends_no_delete`, `test_set_shape_text_clearing_sends_only_a_delete`, `test_set_shape_text_same_text_is_a_noop` |
+| SLD-8 | A table cell is addressed by 0-based row/column; a table without them, a missing cell, row/column on a non-table, or an unknown element id is refused before writing | `set_shape_text_targets_a_table_cell_by_row_and_column`, `set_shape_text_validates_the_target` | `test_set_shape_text_targets_a_table_cell_by_row_and_column`, `test_set_shape_text_validates_the_target` |
+| SLD-9 | `set_shape_text` dry-run reports before/after without writing | `set_shape_text_dry_run_does_not_write` | `test_set_shape_text_dry_run_does_not_write` |
+| SLD-10 | `set_speaker_notes` writes to the notes page's speaker-notes object, gated only when notes already exist | `set_speaker_notes_gates_when_notes_exist_and_targets_the_notes_shape`, `set_speaker_notes_on_a_slide_without_notes_inserts_without_confirm` | `test_set_speaker_notes_gates_when_notes_exist_and_targets_the_notes_shape`, `test_set_speaker_notes_on_a_slide_without_notes_inserts_without_confirm` |
+| SLD-11 | `delete_slide` previews title, element count and text, deletes nothing without `confirm`, and its dry-run does not write | `delete_slide_gates_and_previews_then_deletes_the_page`, `delete_slide_dry_run_does_not_write` | `test_delete_slide_gates_and_previews_then_deletes_the_page`, `test_delete_slide_dry_run_does_not_write` |
+| SLD-12 | `duplicate_slide` sends `duplicateObject` and returns the new slide id, placed immediately after the original; its and `move_slide`'s dry-runs report the plan without writing | `duplicate_slide_returns_the_new_id_placed_after_the_original`, `duplicate_and_move_dry_runs_report_the_plan_without_writing` | `test_duplicate_slide_returns_the_new_id_placed_after_the_original`, `test_duplicate_and_move_dry_runs_report_the_plan_without_writing` |
+| SLD-13 | `move_slide` translates the requested **final** position into the API's pre-move insertion index (one past the target when moving later); a move to its own position is a no-op; out-of-range is refused | `move_slide_translates_the_final_position_to_a_pre_move_insertion_index`, `move_slide_to_its_own_position_is_a_noop_and_range_is_checked` | `test_move_slide_translates_the_final_position_to_a_pre_move_insertion_index` (4 cases), `test_move_slide_to_its_own_position_is_a_noop_and_range_is_checked` |
+| SLD-14 | `create_presentation` returns the id, URL and first slide id; `add_slide` resolves a predefined layout (no deck read) or a deck layout by id/name, honours `position`, fills title/body placeholders, reports `unfilled` rather than failing after the slide exists, and dry-runs without writing | `create_presentation_returns_the_first_slide_id`, `add_slide_predefined_layout_at_a_position_fills_title_and_body_placeholders`, `add_slide_reports_unfilled_instead_of_failing_after_the_slide_was_created`, `add_slide_accepts_a_deck_layout_by_name_and_rejects_unknown_ones`, `add_slide_dry_run_and_position_validation` | the five matching `test_create_presentation_…` / `test_add_slide_…` tests |
+| SLD-15 | `add_slide_comment` posts a plain comment on the slide without confirmation (no assignee key sent); assigning or mentioning gates, previews who would be emailed, and posts nothing unconfirmed | `a_plain_comment_needs_no_confirm_and_targets_the_slide`, `assigning_gates_and_previews_who_would_be_emailed_without_posting`, `a_mention_alone_notifies_and_gates_but_does_not_assign` | `test_a_plain_comment_needs_no_confirm_and_targets_the_slide`, `test_assigning_gates_and_previews_who_would_be_emailed_without_posting`, `test_a_mention_alone_notifies_and_gates_but_does_not_assign` |
+| SLD-16 | A confirmed assignment sends `assigneeEmailAddress` and mentions the assignee as `+email` at the start of the text, each person once; `assigned_to` is what Slides **returned**, never what was requested | `confirmed_assignment_sends_the_assignee_and_mentions_them_in_the_text`, `assignee_and_a_second_mention_are_each_mentioned_once`, `assigned_to_reports_what_slides_returned_not_what_was_requested` | `test_confirmed_assignment_sends_the_assignee_and_mentions_them_in_the_text`, `test_assignee_and_a_second_mention_are_each_mentioned_once`, `test_assigned_to_reports_what_slides_returned_not_what_was_requested` |
+| SLD-17 | A name instead of an email is refused before any I/O; `element` pins the comment to an element that must be on the chosen slide; dry-run neither writes nor gates; empty or over-2048-byte text (counted after the mentions are added) is refused | `a_name_instead_of_an_email_is_refused_before_any_io`, `element_pins_the_comment_to_that_element_and_must_be_on_the_slide`, `comment_dry_run_previews_without_writing_or_gating`, `empty_or_oversize_comments_are_refused_counting_the_added_mentions` | `test_a_name_instead_of_an_email_is_refused_before_any_io`, `test_element_pins_the_comment_to_that_element_and_must_be_on_the_slide`, `test_comment_dry_run_previews_without_writing_or_gating`, `test_empty_or_oversize_comments_are_refused_counting_the_added_mentions` |
+| SLD-18 | `read_presentation` lists threads under the slide whose `commentAnchors` hold the thread's anchor (status, author, assignee, replies), skips deleted ones, and puts threads tied to no slide last; and it alone asks for comments, with the view-only-safe `DEFAULT_FOR_CURRENT_ACCESS` mode | `read_presentation_shows_threads_on_their_slide_and_unanchored_ones_last`, `only_read_presentation_asks_for_comments_and_it_does_so_in_the_view_only_safe_mode`, `clients::tests::slides_get_asks_for_comments_only_when_told_to_and_in_the_view_only_safe_mode` | `test_read_presentation_shows_threads_on_their_slide_and_unanchored_ones_last`, `test_only_read_presentation_asks_for_comments_and_it_does_so_in_the_view_only_safe_mode` |
+
+Registration, read-only/destructive annotations and cross-language surface parity for the ten
+tools are covered by `SRF-1`, `SRF-11` and the annotation assertions in both server integration
+tests. Each of `SLD-4`, `SLD-7`, `SLD-11`, `SLD-13`, `SLD-15` (the notify gate), `SLD-16` (assignee sent, mention prefix, `assigned_to` from the reply) and `SLD-18` (thread-to-slide matching) was mutation-checked in both
+languages: the line it covers was broken and the named test failed.
+
 ### Check counts
 
 | Section | Checks |
@@ -601,11 +635,13 @@ that are assembled below the fake seam. All four mutations are confirmation-gate
 | 4.12 Request layer, credentials and errors | 6 |
 | 4.13 Registered tool surface | 13 |
 | 4.14 Calendar | 21 |
-| **Offline total** | **231** |
+| 4.15 Slides | 18 |
+| **Offline total** | **249** |
 | 5.1 Live Docs (`L1`–`L10`) | 10 |
 | 5.2 Live Sheets (`S1`–`S11`) | 11 |
 | 5.3 Live Calendar (`C1`–`C12`) | 12 |
-| **Total** | **264** |
+| 5.4 Live Slides (`SL1`–`SL14`) | 14 |
+| **Total** | **296** |
 
 ---
 
@@ -749,6 +785,34 @@ series in teardown (including after a Rust panic). No existing calendar or event
 These checks intentionally keep attendee mail disabled. They verify `send_updates=none` against
 Google but do not send real notifications merely to prove that `externalOnly`/`all` sends them.
 
+### 5.4 Slides — `SL1`–`SL14`
+
+    # Python (the folder must be one you may write to; the id is read from the environment)
+    GDRIVE_MCP_LIVE=1 GDRIVE_MCP_LIVE_FOLDER=<folder id> uv run pytest tests/test_live_slides.py -v -s
+
+**Passed against a Google account in Python on 2026-10-13** (1 live test, last run 16.08 s). **There is no
+Rust Slides live harness**, so the Rust implementation has not been run against Google; it is held to
+the same requests by `SLD-1`–`SLD-14` and `SRF-11` only. The harness creates one scratch
+presentation *inside* `GDRIVE_MCP_LIVE_FOLDER`, prints its id, and deletes it in `finally`. It does
+not call `create_presentation`, which writes to the My Drive root.
+
+| # | Claim under test | Pass condition | Observed |
+|---|---|---|---|
+| SL1 | Read | the new deck has one slide whose element ids appear in the rendered content | passed Python, 2026-10-13 |
+| SL2 | Set text on an empty shape | lands with no confirm | passed Python, 2026-10-13 |
+| SL3 | Overwrite gate | preview leaves the old text; `confirm=true` replaces it | passed Python, 2026-10-13 |
+| SL4 | `add_slide` | a slide at position 2 whose title and body placeholders hold the supplied text | passed Python, 2026-10-13 |
+| SL5 | `replace_slide_text` | the confirmed count equals the previewed count, text changes on the slide, and layout/master text is **byte-identical** before and after | passed Python, 2026-10-13 |
+| SL6 | Speaker notes | insert needs no confirm; overwrite is gated; the read-back shows the new notes | passed Python, 2026-10-13 |
+| SL7 | `duplicate_slide` | the copy sits right after the original with identical text | passed Python, 2026-10-13 |
+| SL8 | `move_slide` | the slide lands at the requested final position moving later **and** earlier | passed Python, 2026-10-13 |
+| SL9 | `delete_slide` | unconfirmed leaves 3 slides; confirmed removes exactly that slide | passed Python, 2026-10-13 |
+| SL10 | Table cell | `set_shape_text` with row/column fills that cell and no other | passed Python, 2026-10-13 |
+| SL11 | Plain comment | needs no confirm and appears under its slide on read-back | passed Python, 2026-10-13 |
+| SL12 | Assigned comment | the preview posts nothing; confirmed, Slides returns the assignee, `read_presentation` shows `-> assigned to`, and **Drive's** comments API reports the same `assigneeEmailAddress` and `mentionedEmailAddresses` (the signed-in user's own address only) | passed Python, 2026-10-13 |
+| SL13 | Element-pinned comment | a comment on a shape is listed under its slide | passed Python, 2026-10-13 |
+| SL14 | Name instead of email | refused and nothing posted | passed Python, 2026-10-13 |
+
 ---
 
 ## 6. Empirical findings
@@ -790,6 +854,46 @@ a future change does not have to rediscover them — or, worse, contradict them 
    etag and no `If-Match`, because the API offers no such option on these methods. Checked against
    the source in both implementations, not assumed. The consequence is in §8, and it is the sharpest
    asymmetry between the Docs and Sheets write paths.
+
+7. **The Slides API accepts the `drive` scope on every method used here** (`get`, `create`,
+   `batchUpdate`, `pages.get`), read from the bundled discovery document (revision 20260408), so
+   Slides needed no re-consent. The Slides API still has to be *enabled* in the Cloud project.
+   *(2026-10-13.)*
+
+8. **`replaceAllText` with no `pageObjectIds` is not limited to slides.** The API documents that an
+   empty list applies to all pages, which includes layouts and masters; `replace_slide_text` always
+   names every slide for that reason (`SLD-4`, live `SL5`).
+
+9. **`deleteText` on an empty shape is rejected, so it is never sent** (`SLD-7`). Same family as
+   finding 2.
+
+10. **A Drive `comments.create` whose `fields` mask is invalid still writes the comment.** The call
+    returned HTTP 400 `Invalid field selection assignee_email_address` for a mask naming
+    `assigneeEmailAddress`, yet the comment existed afterwards — a failed response does not mean
+    nothing was written. *(2026-10-13, live.)*
+
+11. **Mentions are real; assignment is not reachable by content or body.** Comments whose content
+    held `+email`, `Hi +email` or `@email` all stored the mention (`htmlContent` carries a
+    `mailto:` link and `mentionedEmailAddresses` lists the address), but `assigneeEmailAddress` read
+    back null for every one, and a body `assigneeEmailAddress` was accepted and ignored. An `anchor`
+    string is stored verbatim whatever it holds (even `"p"`), so a stored anchor says nothing about
+    whether Slides pins the comment to a slide. Google's docs say why: editor apps treat Drive-API comments as unanchored. *(2026-10-13, live.)*
+
+12. **Assignment and slide anchoring exist only on the Slides API's `insertComment`.** Google's live
+    discovery document (revision 20261007 — newer than the 20260408 copy bundled with
+    `google-api-python-client`) has `insertComment` with `assigneeEmailAddress` and an `objectId`.
+    It accepts the `drive` scope and returned HTTP 200. The thread came back `OPEN` with
+    `assigneeEmail` set and a real anchor (`{"uid":…,"pages":["p"],"type":"page"}`, or
+    `"type":"shape"` with `targets` for an element), and Drive's comments API then reported the same
+    `assigneeEmailAddress`. The assignee need **not** be mentioned in the text; a malformed assignee
+    or an unknown `objectId` is a 400. *(2026-10-13, live.)*
+
+13. **`presentations.get` omits comments unless asked.** With no `commentsViewMode` it returns
+    `COMMENTS_VIEW_MODE_OMITTED` (`comments: 0`, no `commentAnchors`) even for an editor. `INCLUDED`
+    is a 403 for a user who cannot view comments, so `read_presentation` sends
+    `DEFAULT_FOR_CURRENT_ACCESS`. The bundled Python client rejects the parameter, so the Python
+    client is now built from the live discovery document (`static_discovery=False`). Found because
+    the first `SL11` run failed. *(2026-10-13, live.)*
 
 ---
 
@@ -928,6 +1032,13 @@ prove resolve→write is atomic. The window between the resolving `get` and the 
 `requiredRevisionId` converts it from silent corruption into a loud failure — that is the designed
 guarantee, and nothing stronger.
 
+**The Slides tools have not been run live in Rust, and `create_presentation` in neither language.**
+`SL1`–`SL14` ran in Python only, inside a sandbox folder. `create_presentation` always writes to the
+My Drive root, so the harness avoids it; `SLD-14` pins the request against a stub only. The Rust
+`add_slide_comment` and comment rendering have likewise not run live (`SL11`–`SL14` are Python only). The
+`insertComment` API is newly published (discovery revision 20261007); the live runs used one Workspace
+account, and Google's help says assignment needs a work or school account.
+
 **`import_excel_as_sheet` has not been run against Google.** `FIL-26`–`FIL-29` prove the request we
 build (target `mimeType` set, Excel source type, sandbox containment) against a stub. That Drive
 actually converts the workbook, and what it does with formulas, formatting or multiple sheets, is
@@ -1047,7 +1158,7 @@ cargo fmt --check --manifest-path rust/Cargo.toml
 
 # Cross-implementation surface parity (SRF-11)
 cargo build --release --manifest-path rust/Cargo.toml
-python3 scripts/diff_tool_surface.py               # tool surfaces match: 38 tools
+python3 scripts/diff_tool_surface.py               # tool surfaces match: 48 tools
 
 # Live, credentialed. Writes disposable resources to the authenticated account. Never run in CI.
 GDRIVE_MCP_LIVE=1 uv run pytest tests/test_live_locator.py -v
@@ -1081,10 +1192,10 @@ Checked where a test or a recorded run backs the box. Unchecked where work is ge
 
 **Suite health**
 
-- [x] `uv run pytest -q` green — 249 passed, 11 skipped
-- [x] `cargo test --manifest-path rust/Cargo.toml` green — 420 passed, 3 ignored
+- [x] `uv run pytest -q` green — 301 passed, 12 skipped
+- [x] `cargo test --manifest-path rust/Cargo.toml` green — 467 passed, 3 ignored
 - [x] `cargo clippy --all-targets` and `cargo fmt --check` clean
-- [x] `scripts/diff_tool_surface.py` green at 38/38 against a release binary
+- [x] `scripts/diff_tool_surface.py` green at 48/48 against a release binary
 
 **Live runs**
 

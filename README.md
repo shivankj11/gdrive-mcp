@@ -1,10 +1,10 @@
 # gdrive-mcp
 
-A read/write MCP for Google Drive, Docs, Sheets & Calendar that fixes what trips agents on naive Google Workspace servers — context floods, unguarded destructive writes, surprise attendee notifications, and inconsistent argument names — with bounded/paged reads, spill-to-disk for full data, and confirm-gated mutations.
+A read/write MCP for Google Drive, Docs, Sheets, Slides & Calendar that fixes what trips agents on naive Google Workspace servers — context floods, unguarded destructive writes, surprise attendee notifications, and inconsistent argument names — with bounded/paged reads, spill-to-disk for full data, and confirm-gated mutations.
 
-> Conventions: Drive/Docs/Sheets tools take their target as **`item`** (a URL or ID); Calendar tools use explicit `calendar_id`/`event_id` arguments. Unknown args are rejected; destructive tools (ᶜ) return an impact preview unless called with `confirm=true`.
+> Conventions: Drive/Docs/Sheets/Slides tools take their target as **`item`** (a URL or ID); Calendar tools use explicit `calendar_id`/`event_id` arguments. Unknown args are rejected; destructive tools (ᶜ) return an impact preview unless called with `confirm=true`.
 >
-> **Dry-run (edit-only):** the edit tools for *existing* files — `append_text`, `insert_text`, `insert_table`, `delete_text`, `replace_text`, `write_sheet`, `append_rows`, `format_cells`, `clear_range`, `delete_rows` — plus all Calendar mutation tools accept `dry_run=true`, returning a predicted before/after **without writing** (client-side; `write_sheet` shows formula cells literally, so Google's recalculation isn't simulated, and Docs `insert_text` reports the insertion point rather than a merged string). Dry-runs are still subject to the verification gate.
+> **Dry-run (edit-only):** the edit tools for *existing* files — `append_text`, `insert_text`, `insert_table`, `delete_text`, `replace_text`, `write_sheet`, `append_rows`, `format_cells`, `clear_range`, `delete_rows`, and the Slides edit tools (`add_slide`, `duplicate_slide`, `move_slide`, `delete_slide`, `replace_slide_text`, `set_shape_text`, `set_speaker_notes`, `add_slide_comment`) — plus all Calendar mutation tools accept `dry_run=true`, returning a predicted before/after **without writing** (client-side; `write_sheet` shows formula cells literally, so Google's recalculation isn't simulated, and Docs `insert_text` reports the insertion point rather than a merged string). Dry-runs are still subject to the verification gate.
 >
 > **Editing a Doc by content, not by offset:** `delete_text`/`replace_text` (and `insert_text`/`insert_table`'s `after`/`before`) locate their target with a **locator** — `match` (a literal, case-sensitive substring lying within one paragraph) or `section` (a heading's exact text, covering that heading and everything under it up to the next heading of the same or higher level). Character offsets into `read_document`'s content are **not** valid Docs indexes: that content is rendered markdown (heading prefixes, synthesized table delimiter rows, escaped pipes) and does not align with the document's UTF-16 index space. The server resolves locators against the API's own element offsets instead, so anchors are always valid — and for block content they land on a paragraph boundary by construction. Each `read_document` `outline` entry also carries real `start`/`end` offsets, plus a `revision_id`; locator writes pin that revision, so a concurrent edit makes the write **fail** rather than land on shifted text.
 >
@@ -49,6 +49,20 @@ A read/write MCP for Google Drive, Docs, Sheets & Calendar that fixes what trips
 - **`clear_range`**ᶜ — clear the values in an A1 range.
 - **`delete_rows`**ᶜ — delete N rows from a tab.
 
+**Slides**
+- **`read_presentation`** — read a deck as text in bounded chunks: each slide's `id` and layout, every element's `id`, type and text (tables cell by cell), speaker notes and comment threads (status, author, assignee, replies), plus an `outline`, the deck's `layouts` and `revision_id`; `slide` reads just one.
+- **`create_presentation`** — create a new deck (in My Drive root).
+- **`add_slide`** — add a slide from a predefined layout or one of the deck's own layouts (by id or name), at a `position`, optionally filling its title and body placeholders.
+- **`duplicate_slide`** — copy a slide, placed right after the original.
+- **`move_slide`** — move a slide to a new 1-based `position`.
+- **`delete_slide`**ᶜ — delete a slide; the preview shows its title, element count and text.
+- **`replace_slide_text`**ᶜ — replace a literal phrase on every slide (or one `slide`), in shapes and table cells; layouts, masters and speaker notes are never touched.
+- **`set_shape_text`**ᶜ — set the whole text of one shape, placeholder or table cell (`row`/`column`), by element `id`; gated only when it overwrites existing text.
+- **`set_speaker_notes`**ᶜ — set a slide's speaker notes; gated only when it overwrites existing notes.
+- **`add_slide_comment`**ᶜ — comment on a slide (or pin it to one element), optionally **assigned** to someone (the editor's "Assign to") and/or @mentioning people. Assignees and mentions must be **email addresses** — a name like `@Sam` can't be resolved to an account. Assigning or mentioning emails the person, so it previews unless called with `confirm=true`; a plain comment needs no confirmation. Uses the Slides API's `insertComment`, which the Drive comments API cannot substitute for: Drive-API comments are never assigned or anchored to a slide.
+
+Slides are addressed by a 1-based number (as a string, e.g. `"3"`) or by the stable object `id` from `read_presentation` — prefer ids, since numbers shift as slides are added, moved or deleted. Edits that resolve against a read pin that deck's `revisionId`, so a concurrent edit makes the write fail rather than land on the wrong content.
+
 **Calendar**
 - **`list_calendars`** — list subscribed calendars with time zone, access role, and pagination.
 - **`list_events`** — list expanded event instances in a bounded time window, with search and pagination.
@@ -89,7 +103,7 @@ The packager can include the app configuration in a private archive; every recip
 still signs in as themselves to create their own token.
 
 1. In a Google Cloud project you control, create an **OAuth client** (Application type **Desktop app**) and configure its consent screen. The `drive` scope is restricted, so follow Google's verification requirements (for personal use, add yourself as a test user).
-2. Enable the [Drive](https://console.cloud.google.com/apis/library/drive.googleapis.com), [Docs](https://console.cloud.google.com/apis/library/docs.googleapis.com), [Sheets](https://console.cloud.google.com/apis/library/sheets.googleapis.com), and [Calendar](https://console.cloud.google.com/apis/library/calendar-json.googleapis.com) APIs. Drive/Docs/Sheets use the `drive` scope; Calendar uses separate narrow calendar-list, event, and free/busy scopes.
+2. Enable the [Drive](https://console.cloud.google.com/apis/library/drive.googleapis.com), [Docs](https://console.cloud.google.com/apis/library/docs.googleapis.com), [Sheets](https://console.cloud.google.com/apis/library/sheets.googleapis.com), [Slides](https://console.cloud.google.com/apis/library/slides.googleapis.com), and [Calendar](https://console.cloud.google.com/apis/library/calendar-json.googleapis.com) APIs. Drive/Docs/Sheets/Slides use the `drive` scope (Slides needs no new consent, but its API must be enabled); Calendar uses separate narrow calendar-list, event, and free/busy scopes.
 3. Save the client JSON to `~/.config/gdrive-mcp/oauth_client.json` (or set `GDRIVE_MCP_OAUTH_CLIENT`), then:
 
 ```bash
@@ -111,7 +125,7 @@ claude mcp add gdrive -- uv run --directory /path/to/gdrive-mcp gdrive-mcp serve
 
 ## Rust implementation (`rust/`)
 
-`rust/` holds a second, self-contained implementation of the same server — same 38 tools, same
+`rust/` holds a second, self-contained implementation of the same server — same 48 tools, same
 argument names, same result shapes, same confirm/dry-run/locator/gate semantics — as a single
 static binary with no Python runtime. The two are interchangeable: they read the **same**
 `~/.config/gdrive-mcp/oauth_client.json` and write the **same** `token.json` (byte-compatible with

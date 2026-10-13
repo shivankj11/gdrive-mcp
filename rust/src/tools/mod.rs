@@ -10,6 +10,7 @@ pub mod discovery;
 pub mod docs;
 pub mod files;
 pub mod sheets;
+pub mod slides;
 
 use serde_json::{Map, Value};
 
@@ -82,6 +83,7 @@ pub fn all_defs() -> Vec<ToolDef> {
     out.extend(docs::defs());
     out.extend(files::defs());
     out.extend(calendar::defs());
+    out.extend(slides::defs());
     out
 }
 
@@ -100,6 +102,9 @@ pub async fn dispatch(name: &str, api: &dyn GoogleApi, args: &Args) -> Result<To
         return r;
     }
     if let Some(r) = calendar::dispatch(name, api, args).await {
+        return r;
+    }
+    if let Some(r) = slides::dispatch(name, api, args).await {
         return r;
     }
     Err(crate::error::ToolError::msg(format!("unknown tool: {name}")))
@@ -306,6 +311,21 @@ pub mod testing {
         async fn docs_batch_update(&self, document_id: &str, body: &Value) -> Result<Value> {
             self.take("docs_batch_update", json!({"document_id": document_id, "body": body}))
         }
+        async fn slides_get(&self, presentation_id: &str, comments: bool) -> Result<Value> {
+            self.take("slides_get", json!({"presentation_id": presentation_id, "comments": comments}))
+        }
+        async fn slides_create(&self, title: &str) -> Result<Value> {
+            self.take("slides_create", json!({"title": title}))
+        }
+        async fn slides_batch_update(&self, presentation_id: &str, body: &Value) -> Result<Value> {
+            self.take("slides_batch_update", json!({"presentation_id": presentation_id, "body": body}))
+        }
+        async fn slides_page_get(&self, presentation_id: &str, page_object_id: &str) -> Result<Value> {
+            self.take(
+                "slides_page_get",
+                json!({"presentation_id": presentation_id, "page_object_id": page_object_id}),
+            )
+        }
         async fn sheets_get(&self, spreadsheet_id: &str, fields: &str) -> Result<Value> {
             self.take("sheets_get", json!({"spreadsheet_id": spreadsheet_id, "fields": fields}))
         }
@@ -452,7 +472,7 @@ mod tests {
     #[test]
     fn every_tool_forbids_unknown_arguments_and_names_itself() {
         let defs = all_defs();
-        assert_eq!(defs.len(), 38, "tool count should match the Python server");
+        assert_eq!(defs.len(), 48, "tool count should match the Python server");
         let mut seen = std::collections::HashSet::new();
         for d in &defs {
             assert!(seen.insert(d.name), "duplicate tool name {}", d.name);
@@ -508,6 +528,14 @@ mod tests {
         "update_event",
         "delete_event",
         "respond_to_event",
+        "add_slide",
+        "duplicate_slide",
+        "move_slide",
+        "delete_slide",
+        "replace_slide_text",
+        "set_shape_text",
+        "set_speaker_notes",
+        "add_slide_comment",
     ];
     const README_CONFIRM_TOOLS: &[&str] = &[
         "delete_text",
@@ -522,6 +550,11 @@ mod tests {
         "update_event",
         "delete_event",
         "respond_to_event",
+        "delete_slide",
+        "replace_slide_text",
+        "set_shape_text",
+        "set_speaker_notes",
+        "add_slide_comment",
     ];
 
     #[test]

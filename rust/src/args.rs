@@ -156,6 +156,10 @@ impl Args {
         }
     }
 
+    pub fn req_i64(&self, key: &str) -> Result<i64> {
+        self.opt_i64(key)?.ok_or_else(|| self.missing(key))
+    }
+
     pub fn i64_or(&self, key: &str, default: i64) -> Result<i64> {
         Ok(self.opt_i64(key)?.unwrap_or(default))
     }

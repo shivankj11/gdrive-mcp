@@ -1,7 +1,7 @@
 //! The Google API surface this server needs, behind one trait.
 //!
 //! [`GoogleApi`] is the seam the tool modules are written against: [`GoogleClient`] talks to the
-//! real Drive/Docs/Sheets/Calendar REST endpoints with the user's OAuth credentials, and the tool tests
+//! real Drive/Docs/Sheets/Slides/Calendar REST endpoints with the user's OAuth credentials, and the tool tests
 //! substitute a fake. Credentials are loaded (and refreshed when stale) on first use; if no
 //! cached token exists that surfaces as the same "run `gdrive-mcp auth`" message the Python
 //! implementation raised.
@@ -19,6 +19,7 @@ const DRIVE: &str = "https://www.googleapis.com/drive/v3";
 const DRIVE_UPLOAD: &str = "https://www.googleapis.com/upload/drive/v3";
 const DOCS: &str = "https://docs.googleapis.com/v1";
 const SHEETS: &str = "https://sheets.googleapis.com/v4";
+const SLIDES: &str = "https://slides.googleapis.com/v1";
 const CALENDAR: &str = "https://www.googleapis.com/calendar/v3";
 
 /// Everything not unreserved per RFC 3986 — Sheets A1 ranges go in the path and contain
@@ -120,6 +121,15 @@ pub trait GoogleApi: Send + Sync {
     async fn docs_get(&self, document_id: &str) -> Result<Value>;
     async fn docs_create(&self, title: &str, fields: &str) -> Result<Value>;
     async fn docs_batch_update(&self, document_id: &str, body: &Value) -> Result<Value>;
+
+    // ---- Slides --------------------------------------------------------------------------
+    /// `presentations.get`. Comments are omitted unless `comments` is set, which sends
+    /// `commentsViewMode` (see [`slides_get_query`]).
+    async fn slides_get(&self, presentation_id: &str, comments: bool) -> Result<Value>;
+    async fn slides_create(&self, title: &str) -> Result<Value>;
+    async fn slides_batch_update(&self, presentation_id: &str, body: &Value) -> Result<Value>;
+    /// `presentations.pages.get`: one page (slide) of a presentation.
+    async fn slides_page_get(&self, presentation_id: &str, page_object_id: &str) -> Result<Value>;
 
     // ---- Sheets --------------------------------------------------------------------------
     async fn sheets_get(&self, spreadsheet_id: &str, fields: &str) -> Result<Value>;
@@ -444,6 +454,17 @@ async fn check(resp: reqwest::Response) -> Result<reqwest::Response> {
     Err(ToolError::Api { status: status.as_u16(), reason })
 }
 
+/// Query for `presentations.get`. Slides omits comments unless `commentsViewMode` is sent, and
+/// `INCLUDED` is a 403 for a user who cannot view comments, so the mode that degrades safely is
+/// `DEFAULT_FOR_CURRENT_ACCESS` (included for editors, omitted for view-only users).
+fn slides_get_query(comments: bool) -> Vec<(&'static str, String)> {
+    if comments {
+        vec![("commentsViewMode", "COMMENTS_VIEW_MODE_DEFAULT_FOR_CURRENT_ACCESS".to_string())]
+    } else {
+        Vec::new()
+    }
+}
+
 fn q(pairs: Vec<(&str, String)>) -> Vec<(&str, String)> {
     pairs
 }
@@ -710,6 +731,41 @@ impl GoogleApi for GoogleClient {
         .await
     }
 
+    async fn slides_get(&self, presentation_id: &str, comments: bool) -> Result<Value> {
+        self.json(
+            Method::GET,
+            &format!("{SLIDES}/presentations/{}", seg(presentation_id)),
+            &slides_get_query(comments),
+            None,
+        )
+        .await
+    }
+
+    async fn slides_create(&self, title: &str) -> Result<Value> {
+        self.json(Method::POST, &format!("{SLIDES}/presentations"), &[], Some(&json!({ "title": title })))
+            .await
+    }
+
+    async fn slides_batch_update(&self, presentation_id: &str, body: &Value) -> Result<Value> {
+        self.json(
+            Method::POST,
+            &format!("{SLIDES}/presentations/{}:batchUpdate", seg(presentation_id)),
+            &[],
+            Some(body),
+        )
+        .await
+    }
+
+    async fn slides_page_get(&self, presentation_id: &str, page_object_id: &str) -> Result<Value> {
+        self.json(
+            Method::GET,
+            &format!("{SLIDES}/presentations/{}/pages/{}", seg(presentation_id), seg(page_object_id)),
+            &[],
+            None,
+        )
+        .await
+    }
+
     async fn sheets_get(&self, spreadsheet_id: &str, fields: &str) -> Result<Value> {
         self.json(
             Method::GET,
@@ -953,6 +1009,15 @@ mod tests {
             "an append without INSERT_ROWS overwrites whatever sits below the data: {query:?}"
         );
         assert!(query.contains(&("valueInputOption", "RAW".to_string())), "{query:?}");
+    }
+
+    #[test]
+    fn slides_get_asks_for_comments_only_when_told_to_and_in_the_view_only_safe_mode() {
+        assert_eq!(
+            slides_get_query(true),
+            vec![("commentsViewMode", "COMMENTS_VIEW_MODE_DEFAULT_FOR_CURRENT_ACCESS".to_string())]
+        );
+        assert!(slides_get_query(false).is_empty());
     }
 
     #[test]
