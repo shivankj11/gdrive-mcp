@@ -1253,3 +1253,62 @@ def test_import_excel_source_escaping_the_sandbox_is_rejected(monkeypatch, tmp_p
     with pytest.raises(RuntimeError, match="must be inside the files dir"):
         files_mod.import_excel_as_sheet("../../secret.xlsx")
     assert not svc.files.return_value.create.called
+
+
+# ---- import_powerpoint_as_slides -----------------------------------------------------
+
+_PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+_SLIDES_MIME = "application/vnd.google-apps.presentation"
+
+
+def _slides_import_svc():
+    svc = MagicMock()
+    svc.files.return_value.create.return_value.execute.return_value = {
+        "id": "P", "name": "Deck", "mimeType": _SLIDES_MIME, "webViewLink": "u",
+    }
+    return svc
+
+
+def test_import_powerpoint_asks_drive_to_convert_to_native_slides(monkeypatch, tmp_path):
+    (tmp_path / "Deck.pptx").write_bytes(b"PK")
+    svc = _slides_import_svc()
+    monkeypatch.setattr(files_mod, "drive", lambda: svc)
+    monkeypatch.setenv("GDRIVE_MCP_FILES_DIR", str(tmp_path))
+    out = files_mod.import_powerpoint_as_slides("Deck.pptx")
+    kwargs = svc.files.return_value.create.call_args.kwargs
+    # The target mimeType in the metadata is what triggers conversion; without it Drive stores
+    # the deck as an opaque .pptx.
+    assert kwargs["body"] == {"name": "Deck", "mimeType": _SLIDES_MIME}
+    assert kwargs["media_body"].mimetype() == _PPTX_MIME
+    assert kwargs["supportsAllDrives"] is True
+    assert out == {"id": "P", "name": "Deck", "mime_type": _SLIDES_MIME, "url": "u"}
+
+
+def test_import_powerpoint_honours_name_parent_and_the_legacy_ppt_type(monkeypatch, tmp_path):
+    (tmp_path / "old.PPT").write_bytes(b"\xd0\xcf")
+    svc = _slides_import_svc()
+    monkeypatch.setattr(files_mod, "drive", lambda: svc)
+    monkeypatch.setenv("GDRIVE_MCP_FILES_DIR", str(tmp_path))
+    files_mod.import_powerpoint_as_slides("old.PPT", name="Review", parent="B" * 30)
+    kwargs = svc.files.return_value.create.call_args.kwargs
+    assert kwargs["body"]["name"] == "Review" and kwargs["body"]["parents"] == ["B" * 30]
+    assert kwargs["media_body"].mimetype() == "application/vnd.ms-powerpoint"
+
+
+def test_import_powerpoint_refuses_a_non_powerpoint_file_before_any_drive_call(monkeypatch, tmp_path):
+    (tmp_path / "notes.pdf").write_bytes(b"%PDF")
+    svc = _slides_import_svc()
+    monkeypatch.setattr(files_mod, "drive", lambda: svc)
+    monkeypatch.setenv("GDRIVE_MCP_FILES_DIR", str(tmp_path))
+    with pytest.raises(RuntimeError, match="notes.pdf is not a PowerPoint file; expected .pptx or .ppt"):
+        files_mod.import_powerpoint_as_slides("notes.pdf")
+    assert not svc.files.return_value.create.called
+
+
+def test_import_powerpoint_source_escaping_the_sandbox_is_rejected(monkeypatch, tmp_path):
+    svc = _slides_import_svc()
+    monkeypatch.setattr(files_mod, "drive", lambda: svc)
+    monkeypatch.setenv("GDRIVE_MCP_FILES_DIR", str(tmp_path))
+    with pytest.raises(RuntimeError, match="must be inside the files dir"):
+        files_mod.import_powerpoint_as_slides("../../secret.pptx")
+    assert not svc.files.return_value.create.called

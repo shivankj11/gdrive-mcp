@@ -21,7 +21,7 @@ There are two implementations of the same MCP server, and they are meant to be i
 | | Source | Tests | Status |
 |---|---|---|---|
 | **Python** | `src/gdrive_mcp/**` | `tests/**` | the behaviour of record |
-| **Rust** | `rust/src/**` | `rust/src/**` (`mod tests`) + `rust/tests/**` | a port: same 48 tools, same argument names, same result shapes, same confirm / dry-run / locator / gate semantics |
+| **Rust** | `rust/src/**` | `rust/src/**` (`mod tests`) + `rust/tests/**` | a port: same 49 tools, same argument names, same result shapes, same confirm / dry-run / locator / gate semantics |
 
 They read the same OAuth client and write the same token file, so authenticating one authenticates
 the other. That is convenient and it is also a hazard: it means a Rust defect is reachable by
@@ -63,9 +63,9 @@ A plan that pretends it drove the implementation is worth less than one that adm
 
 | | Measured |
 |---|---|
-| Rust | `cargo test` on a Unix host: **467 passed, 3 ignored** (455 library tests + 9 server integration tests + 3 credential-free live-harness companions; the 3 ignored are the live harnesses). A few sandbox checks are `#[cfg(unix)]`, so a Windows run counts fewer. `cargo clippy --all-targets` and `cargo fmt --check` clean. |
-| Python | `uv run pytest -q`: **301 passed, 12 skipped** (the skipped tests are the live locator, Calendar and Slides harnesses, latched off). |
-| Cross-implementation | `scripts/diff_tool_surface.py`: green at **48/48** tools. |
+| Rust | `cargo test` on a Unix host: **471 passed, 3 ignored** (459 library tests + 9 server integration tests + 3 credential-free live-harness companions; the 3 ignored are the live harnesses). A few sandbox checks are `#[cfg(unix)]`, so a Windows run counts fewer. `cargo clippy --all-targets` and `cargo fmt --check` clean. |
+| Python | `uv run pytest -q`: **305 passed, 12 skipped** (the skipped tests are the live locator, Calendar and Slides harnesses, latched off). |
+| Cross-implementation | `scripts/diff_tool_surface.py`: green at **49/49** tools. |
 | Live credentialed | Docs `L1`–`L10`: Python 2026-08-06 (10 passed); Rust 2026-08-07 (10 passed, 11.6 s). Sheets `S1`–`S11`: Rust 2026-08-07 (11 passed, 15.3 s); **Python has never had a Sheets live run.** Calendar `C1`–`C12`: Python 2026-09-08 (2 tests passed, 9.48 s); Rust 2026-09-08 (1 live test passed, 7.08 s). |
 
 ---
@@ -413,9 +413,9 @@ Rust names relative to `tools::sheets::tests::`, Python to `test_tools_unit.py::
 doubles the apostrophe, and then the client percent-encodes each `'` into `%27`. Live check `S9` is
 what establishes that Google accepts the result.
 
-### 4.8 Files — 29 checks
+### 4.8 Files — 33 checks
 
-`read_file_as_text`, `download_file`, `upload_file`, `import_excel_as_sheet`, `move_file`, `rename_file`, `export_file`.
+`read_file_as_text`, `download_file`, `upload_file`, `import_excel_as_sheet`, `import_powerpoint_as_slides`, `move_file`, `rename_file`, `export_file`.
 These can replace a file's bytes, re-parent it, rename it — and they are the tools that touch the
 **local** filesystem. Rust names relative to `tools::files::tests::`.
 
@@ -450,6 +450,10 @@ These can replace a file's bytes, re-parent it, rename it — and they are the t
 | FIL-27 | `name` and `parent` are honoured, and a (case-insensitive) legacy `.xls` is sent as `application/vnd.ms-excel` | `an_excel_import_honours_name_parent_and_the_legacy_xls_type` | `test_import_excel_honours_name_parent_and_the_legacy_xls_type` |
 | FIL-28 | A non-Excel extension is refused (`<file> is not an Excel file; expected .xlsx or .xls`) before any Drive call | `an_excel_import_refuses_a_non_excel_file_before_any_drive_call` | `test_import_excel_refuses_a_non_excel_file_before_any_drive_call` |
 | FIL-29 | A `source_path` escaping the sandbox is rejected before any Drive call | `an_excel_import_source_escaping_the_sandbox_is_rejected` | `test_import_excel_source_escaping_the_sandbox_is_rejected` |
+| FIL-30 | `import_powerpoint_as_slides` sets the **target** `mimeType` to `application/vnd.google-apps.presentation` in the create metadata (without it Drive stores an opaque `.pptx`), uploads the bytes as the PowerPoint type, defaults `name` to the filename stem, and returns the converted `mime_type` | `a_powerpoint_import_asks_drive_to_convert_to_native_slides` | `test_import_powerpoint_asks_drive_to_convert_to_native_slides` |
+| FIL-31 | `name` and `parent` are honoured, and a (case-insensitive) legacy `.ppt` is sent as `application/vnd.ms-powerpoint` | `a_powerpoint_import_honours_name_parent_and_the_legacy_ppt_type` | `test_import_powerpoint_honours_name_parent_and_the_legacy_ppt_type` |
+| FIL-32 | A non-PowerPoint extension is refused (`<file> is not a PowerPoint file; expected .pptx or .ppt`) before any Drive call | `a_powerpoint_import_refuses_a_non_powerpoint_file_before_any_drive_call` | `test_import_powerpoint_refuses_a_non_powerpoint_file_before_any_drive_call` |
+| FIL-33 | A `source_path` escaping the sandbox is rejected before any Drive call | `a_powerpoint_import_source_escaping_the_sandbox_is_rejected` | `test_import_powerpoint_source_escaping_the_sandbox_is_rejected` |
 
 **Asymmetry.** `read_file_as_text`, `download_file`, `export_file` and `create_spreadsheet` /
 `add_tab` (`SHT-46`/`47`) have **no Python tool-level tests at all**, and `upload_file` has one — the
@@ -535,7 +539,7 @@ What the MCP client is actually told, and what happens to the arguments it sends
 
 | # | Claim | Rust | Python |
 |---|---|---|---|
-| SRF-1 | All **48** tools register, with unique names and non-empty descriptions | `server_integration.rs::every_tool_is_registered_with_the_right_annotations` (asserts `tools.len() == 48`), `tools::tests::every_tool_forbids_unknown_arguments_and_names_itself` | `test_server_integration.py::test_registered_tools_and_annotations` (`len(by_name) == 48`) |
+| SRF-1 | All **49** tools register, with unique names and non-empty descriptions | `server_integration.rs::every_tool_is_registered_with_the_right_annotations` (asserts `tools.len() == 49`), `tools::tests::every_tool_forbids_unknown_arguments_and_names_itself` | `test_server_integration.py::test_registered_tools_and_annotations` (`len(by_name) == 49`) |
 | SRF-2 | The read-only and destructive sets are the Python sets **verbatim**, are disjoint, and every name in them is actually registered — set membership *is* the contract, since it is what every client is told | `server::tests::the_annotated_sets_are_the_python_sets_verbatim` | `test_registered_tools_and_annotations` (representatives only) |
 | SRF-3 | Read-only tools carry `readOnlyHint` and leave `destructiveHint` **unset** — a read cannot destroy anything, so claiming `false` would be a claim the Python never made; destructive tools carry the inverse triple | `server::tests::every_read_only_tool_is_annotated_as_such`, `every_destructive_tool_carries_the_destructive_hint` | representatives only |
 | SRF-4 | Additive tools are writes but not destructive — and `read_full_sheet` is in that set, **not** in read-only, because it spills a local file | `server::tests::additive_tools_are_writes_but_not_destructive` | — |
@@ -545,7 +549,7 @@ What the MCP client is actually told, and what happens to the arguments it sends
 | SRF-8 | An unknown argument is **rejected**, not dropped, on the registered path | `server_integration.rs::an_unknown_argument_is_rejected_rather_than_dropped`, `args::tests::unknown_arguments_are_rejected_rather_than_dropped` | `test_unknown_kwarg_rejected_on_registered_path`, `test_unknown_kwarg_rejected_on_new_tools` |
 | SRF-9 | Argument coercion reproduces **both** of FastMCP's layers, not just the strict one: a list sent as a JSON string is re-parsed, a boolean sent as `"true"` is coerced, an integral float counts as an integer, an explicit `null` reads as the documented default — while a word that is not a boolean is still rejected, a string that merely looks numeric is left alone, wrong types are reported with the argument name, missing required arguments say so, and `rows` must be a list of lists | `args::tests::a_list_argument_sent_as_a_json_string_is_re_parsed`, `booleans_and_integers_accept_the_spellings_pydantic_coerced`, `integral_floats_count_as_integers`, `explicit_null_reads_as_the_documented_default`, `a_word_that_is_not_a_boolean_is_still_rejected`, `a_string_that_merely_looks_numeric_is_left_alone`, `wrong_types_are_reported_with_the_argument_name`, `missing_required_arguments_say_so`, `rows_must_be_a_list_of_lists` | n/a — pydantic's own behaviour, which the Rust tests encode |
 | SRF-10 | Tools are declared in the order the Python modules registered them, and each module's dispatch ignores names it does not own | `tools::{discovery,docs,sheets,files,calendar}::tests::*declared*order*` and each module's unrelated-name dispatch test | n/a |
-| SRF-11 | **Cross-language surface parity**: identical names, descriptions, argument names, argument **order**, required sets and defaults, and a schema that forbids unknown arguments | `scripts/diff_tool_surface.py` — reads the Python signatures and docstrings out of the AST (no import, no credentials), starts the Rust binary, asks it for `tools/list` over stdio, and diffs. Exits non-zero on any mismatch. **Green at 48/48.** | same script |
+| SRF-11 | **Cross-language surface parity**: identical names, descriptions, argument names, argument **order**, required sets and defaults, and a schema that forbids unknown arguments | `scripts/diff_tool_surface.py` — reads the Python signatures and docstrings out of the AST (no import, no credentials), starts the Rust binary, asks it for `tools/list` over stdio, and diffs. Exits non-zero on any mismatch. **Green at 49/49.** | same script |
 | SRF-12 | An impact preview names the action and never claims success | `guard::tests::a_preview_names_the_action_and_never_claims_success` | `test_guard.py::test_preview_shape` |
 | SRF-13 | The locator edit tools are registered destructive, and the insert tools expose their locator parameters | see `LOC-36` | see `LOC-36` |
 
@@ -1044,6 +1048,11 @@ build (target `mimeType` set, Excel source type, sandbox containment) against a 
 actually converts the workbook, and what it does with formulas, formatting or multiple sheets, is
 unverified until a live run.
 
+**`import_powerpoint_as_slides` has not been run against Google.** `FIL-30`–`FIL-33` prove the
+request we build (target `mimeType` set, PowerPoint source type, sandbox containment) against a
+stub. That Drive converts the deck, and how faithfully it carries charts, fonts and layouts across,
+is unverified until a live run.
+
 **The Sheets read→write window is unguarded, and that is not fixable with the current API.** Per §6
 finding 6, Sheets offers no `writeControl` equivalent. Consequently:
 
@@ -1158,7 +1167,7 @@ cargo fmt --check --manifest-path rust/Cargo.toml
 
 # Cross-implementation surface parity (SRF-11)
 cargo build --release --manifest-path rust/Cargo.toml
-python3 scripts/diff_tool_surface.py               # tool surfaces match: 48 tools
+python3 scripts/diff_tool_surface.py               # tool surfaces match: 49 tools
 
 # Live, credentialed. Writes disposable resources to the authenticated account. Never run in CI.
 GDRIVE_MCP_LIVE=1 uv run pytest tests/test_live_locator.py -v
@@ -1192,10 +1201,10 @@ Checked where a test or a recorded run backs the box. Unchecked where work is ge
 
 **Suite health**
 
-- [x] `uv run pytest -q` green — 301 passed, 12 skipped
-- [x] `cargo test --manifest-path rust/Cargo.toml` green — 467 passed, 3 ignored
+- [x] `uv run pytest -q` green — 305 passed, 12 skipped
+- [x] `cargo test --manifest-path rust/Cargo.toml` green — 471 passed, 3 ignored
 - [x] `cargo clippy --all-targets` and `cargo fmt --check` clean
-- [x] `scripts/diff_tool_surface.py` green at 48/48 against a release binary
+- [x] `scripts/diff_tool_surface.py` green at 49/49 against a release binary
 
 **Live runs**
 

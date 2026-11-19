@@ -40,6 +40,12 @@ _EXCEL_MIME = {
     ".xls": "application/vnd.ms-excel",
 }
 
+# PowerPoint formats Drive can convert on import, keyed by lowercase file extension.
+_POWERPOINT_MIME = {
+    ".pptx": _EXPORT_MIME["pptx"],
+    ".ppt": "application/vnd.ms-powerpoint",
+}
+
 _GOOGLE_EXPORT_TEXT = {
     "application/vnd.google-apps.document": "text/plain",
     "application/vnd.google-apps.spreadsheet": "text/csv",
@@ -174,6 +180,32 @@ def import_excel_as_sheet(source_path: str, name: str | None = None, parent: str
 
 
 @api_errors
+def import_powerpoint_as_slides(source_path: str, name: str | None = None, parent: str | None = None) -> dict:
+    """Upload a PowerPoint file (.pptx or .ppt) and convert it to a native Google Slides presentation.
+
+    `source_path` must be inside the sandbox files dir. `name` defaults to the file name without
+    its extension. Always creates a new presentation; it never replaces an existing file.
+    """
+    path = safe_read_path(source_path)
+    mime = _POWERPOINT_MIME.get(path.suffix.lower())
+    if not mime:
+        raise RuntimeError(f"{path.name} is not a PowerPoint file; expected .pptx or .ppt")
+    # Setting the target mimeType in the metadata is what makes Drive convert the upload rather
+    # than store the .pptx as an opaque file.
+    body: dict = {"name": name or path.stem, "mimeType": "application/vnd.google-apps.presentation"}
+    if parent:
+        body["parents"] = [parse_ref(parent).id]
+    media = MediaFileUpload(str(path), mimetype=mime, resumable=False)
+    f = (
+        drive()
+        .files()
+        .create(body=body, media_body=media, fields="id,name,mimeType,webViewLink", supportsAllDrives=True)
+        .execute()
+    )
+    return {"id": f["id"], "name": f["name"], "mime_type": f["mimeType"], "url": f.get("webViewLink")}
+
+
+@api_errors
 def move_file(item: str, parent: str, confirm: bool = False) -> dict:
     """Move a file (item) into a different folder (parent). Requires confirm=true."""
     ref = parse_ref(item)
@@ -232,6 +264,7 @@ _TOOLS = (
     download_file,
     upload_file,
     import_excel_as_sheet,
+    import_powerpoint_as_slides,
     move_file,
     rename_file,
     export_file,

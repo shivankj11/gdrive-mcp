@@ -41,6 +41,12 @@ const EXCEL_MIME: &[(&str, &str)] = &[
     (".xls", "application/vnd.ms-excel"),
 ];
 
+/// PowerPoint formats Drive can convert on import, keyed by lowercase file extension.
+const POWERPOINT_MIME: &[(&str, &str)] = &[
+    (".pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation"),
+    (".ppt", "application/vnd.ms-powerpoint"),
+];
+
 const GOOGLE_EXPORT_TEXT: &[(&str, &str)] = &[
     ("application/vnd.google-apps.document", "text/plain"),
     ("application/vnd.google-apps.spreadsheet", "text/csv"),
@@ -267,6 +273,39 @@ async fn import_excel_as_sheet(api: &dyn GoogleApi, args: &Args) -> Result<ToolO
     .into())
 }
 
+async fn import_powerpoint_as_slides(api: &dyn GoogleApi, args: &Args) -> Result<ToolOutput> {
+    let source_path = args.req_str("source_path")?;
+    let name = nonempty(args.opt_str("name")?);
+    let parent = nonempty(args.opt_str("parent")?);
+
+    let path = safe_read_path(&source_path)?;
+    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+    let ext = path.extension().and_then(|e| e.to_str()).map(|e| format!(".{}", e.to_lowercase()));
+    let Some(mime) = ext.as_deref().and_then(|e| lookup(POWERPOINT_MIME, e)) else {
+        return Err(ToolError::msg(format!("{file_name} is not a PowerPoint file; expected .pptx or .ppt")));
+    };
+    // Setting the target mimeType in the metadata is what makes Drive convert the upload rather
+    // than store the .pptx as an opaque file.
+    let name =
+        name.unwrap_or_else(|| path.file_stem().and_then(|s| s.to_str()).unwrap_or_default().to_string());
+    let mut body = json!({"name": name, "mimeType": "application/vnd.google-apps.presentation"});
+    if let Some(parent) = parent {
+        if let Some(obj) = body.as_object_mut() {
+            obj.insert("parents".to_string(), json!([parse_ref(&parent)?.id]));
+        }
+    }
+    let f = api
+        .drive_files_create_media(&body, mime, std::fs::read(&path)?, "id,name,mimeType,webViewLink")
+        .await?;
+    Ok(json!({
+        "id": field(&f, "id")?,
+        "name": field(&f, "name")?,
+        "mime_type": field(&f, "mimeType")?,
+        "url": optional(&f, "webViewLink"),
+    })
+    .into())
+}
+
 async fn move_file(api: &dyn GoogleApi, args: &Args) -> Result<ToolOutput> {
     let item = args.req_str("item")?;
     let parent = args.req_str("parent")?;
@@ -407,6 +446,22 @@ pub fn defs() -> Vec<ToolDef> {
             }),
         ),
         ToolDef::new(
+            "import_powerpoint_as_slides",
+            "Upload a PowerPoint file (.pptx or .ppt) and convert it to a native Google Slides \
+             presentation.\n\n\
+             `source_path` must be inside the sandbox files dir. `name` defaults to the file name \
+             without\nits extension. Always creates a new presentation; it never replaces an \
+             existing file.",
+            json!({
+                "properties": {
+                    "source_path": {"type": "string"},
+                    "name": {"type": "string"},
+                    "parent": {"type": "string"},
+                },
+                "required": ["source_path"],
+            }),
+        ),
+        ToolDef::new(
             "move_file",
             "Move a file (item) into a different folder (parent). Requires confirm=true.",
             json!({
@@ -454,6 +509,7 @@ pub async fn dispatch(name: &str, api: &dyn GoogleApi, args: &Args) -> Option<Re
         "download_file" => download_file(api, args).await,
         "upload_file" => upload_file(api, args).await,
         "import_excel_as_sheet" => import_excel_as_sheet(api, args).await,
+        "import_powerpoint_as_slides" => import_powerpoint_as_slides(api, args).await,
         "move_file" => move_file(api, args).await,
         "rename_file" => rename_file(api, args).await,
         "export_file" => export_file(api, args).await,
@@ -588,6 +644,7 @@ mod tests {
                 "download_file",
                 "upload_file",
                 "import_excel_as_sheet",
+                "import_powerpoint_as_slides",
                 "move_file",
                 "rename_file",
                 "export_file"
@@ -1043,6 +1100,79 @@ mod tests {
         let _sandbox = Sandbox::new();
         let api = FakeApi::new();
         let message = err(&api, "import_excel_as_sheet", json!({"source_path": "../../secret.xlsx"})).await;
+        assert!(message.contains("must be inside the files dir"), "{message}");
+        assert!(api.calls().is_empty());
+    }
+
+    // ---- import_powerpoint_as_slides -----------------------------------------------------
+
+    const PPTX_MIME: &str = "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+    const SLIDES_MIME: &str = "application/vnd.google-apps.presentation";
+
+    fn converted_deck() -> Value {
+        json!({"id": "P", "name": "Deck", "mimeType": SLIDES_MIME, "webViewLink": "u"})
+    }
+
+    #[tokio::test]
+    async fn a_powerpoint_import_asks_drive_to_convert_to_native_slides() {
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let sandbox = Sandbox::new();
+        std::fs::create_dir_all(&sandbox.root).unwrap();
+        std::fs::write(sandbox.path("Deck.pptx"), b"PK").unwrap();
+        let api = FakeApi::new();
+        api.on("drive_files_create_media", converted_deck());
+        let out = ok(&api, "import_powerpoint_as_slides", json!({"source_path": "Deck.pptx"})).await;
+        let call = api.last("drive_files_create_media");
+        // The target mimeType in the metadata is what triggers conversion; without it Drive
+        // stores the deck as an opaque .pptx.
+        assert_eq!(call["metadata"], json!({"name": "Deck", "mimeType": SLIDES_MIME}));
+        assert_eq!(call["mime_type"], PPTX_MIME);
+        assert_eq!(call["bytes"], 2);
+        assert_eq!(call["fields"], "id,name,mimeType,webViewLink");
+        assert_eq!(out, json!({"id": "P", "name": "Deck", "mime_type": SLIDES_MIME, "url": "u"}));
+    }
+
+    #[tokio::test]
+    async fn a_powerpoint_import_honours_name_parent_and_the_legacy_ppt_type() {
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let sandbox = Sandbox::new();
+        std::fs::create_dir_all(&sandbox.root).unwrap();
+        std::fs::write(sandbox.path("old.PPT"), b"\xd0\xcf").unwrap();
+        let api = FakeApi::new();
+        api.on("drive_files_create_media", converted_deck());
+        ok(
+            &api,
+            "import_powerpoint_as_slides",
+            json!({"source_path": "old.PPT", "name": "Review", "parent": A_FOLDER_ID}),
+        )
+        .await;
+        let call = api.last("drive_files_create_media");
+        assert_eq!(
+            call["metadata"],
+            json!({"name": "Review", "mimeType": SLIDES_MIME, "parents": [A_FOLDER_ID]})
+        );
+        assert_eq!(call["mime_type"], "application/vnd.ms-powerpoint");
+    }
+
+    #[tokio::test]
+    async fn a_powerpoint_import_refuses_a_non_powerpoint_file_before_any_drive_call() {
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let sandbox = Sandbox::new();
+        std::fs::create_dir_all(&sandbox.root).unwrap();
+        std::fs::write(sandbox.path("notes.pdf"), b"%PDF").unwrap();
+        let api = FakeApi::new();
+        let message = err(&api, "import_powerpoint_as_slides", json!({"source_path": "notes.pdf"})).await;
+        assert_eq!(message, "notes.pdf is not a PowerPoint file; expected .pptx or .ppt");
+        assert!(api.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_powerpoint_import_source_escaping_the_sandbox_is_rejected() {
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _sandbox = Sandbox::new();
+        let api = FakeApi::new();
+        let message =
+            err(&api, "import_powerpoint_as_slides", json!({"source_path": "../../secret.pptx"})).await;
         assert!(message.contains("must be inside the files dir"), "{message}");
         assert!(api.calls().is_empty());
     }
